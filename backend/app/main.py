@@ -19,9 +19,11 @@ from app.routes.documents import ws_router as scan_ws_router
 from app.routes.fhir import router as fhir_router
 from app.routes.intelligence import router as intelligence_router
 from app.routes.interview import router as interview_router
+from app.routes.patient import router as patient_router
 from app.routes.red_flag import router as red_flag_router
 from app.routes.session import router as session_router
 from app.routes.summary import router as summary_router
+from app.routes.visualization import router as visualization_router
 from app.services.asr import transcribe
 from app.services.tts import synthesize
 
@@ -70,6 +72,8 @@ app.include_router(documents_router)
 app.include_router(scan_ws_router)
 app.include_router(intelligence_router)
 app.include_router(red_flag_router)
+app.include_router(patient_router)
+app.include_router(visualization_router)
 
 
 

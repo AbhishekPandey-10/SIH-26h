@@ -27,6 +27,7 @@ from app.db.models import (
     InterviewTranscript,
     RedFlagEventModel,
 )
+from app.services.folk_idioms import folk_idiom_normalizer
 from app.services.polypharmacy_detector import polypharmacy_detector
 from app.shared.schemas import SummaryField, SummarySource
 
@@ -398,10 +399,16 @@ class SummaryGenerator:
         cc_entry = next((t for t in transcripts if t.get("question_id") == "q_cc_01" or "chief" in t.get("node_name", "")), None)
         if cc_entry:
             ans = cc_entry.get("answer", "")
+            norm_cc = folk_idiom_normalizer.normalize_statement(ans)
+            cc_content = (
+                f"Primary presenting symptom: {norm_cc['clinical_summary']}"
+                if norm_cc.get("has_idiom")
+                else f"Primary presenting symptom: {ans}"
+            )
             fields.append({
                 "field_id": "sf_cc_01",
                 "section": "chief_complaint",
-                "content": f"Primary presenting symptom: {ans}",
+                "content": cc_content,
                 "sources": [
                     {
                         "type": "transcript",
@@ -416,15 +423,40 @@ class SummaryGenerator:
         soc_entry = next((t for t in transcripts if "soc" in t.get("question_id", "") or "socrates" in t.get("node_name", "")), None)
         if soc_entry:
             ans = soc_entry.get("answer", "")
+            norm_soc = folk_idiom_normalizer.normalize_statement(ans)
+            soc_content = (
+                f"Symptom character and onset: {norm_soc['clinical_summary']}"
+                if norm_soc.get("has_idiom")
+                else f"Symptom character and onset: {ans}"
+            )
             fields.append({
                 "field_id": "sf_hpi_01",
                 "section": "hpi",
-                "content": f"Symptom character and onset: {ans}",
+                "content": soc_content,
                 "sources": [
                     {
                         "type": "transcript",
                         "ref_id": soc_entry.get("question_id", "soc_01"),
                         "snippet": ans,
+                    }
+                ],
+                "verification": "patient_reported",
+            })
+
+        # Post-consult Unvoiced Concern
+        unvoiced_entry = next((t for t in transcripts if t.get("node_name") == "unvoiced_concern"), None)
+        if unvoiced_entry:
+            u_ans = unvoiced_entry.get("answer", "")
+            norm_u = folk_idiom_normalizer.normalize_statement(u_ans)
+            fields.append({
+                "field_id": "sf_unvoiced_01",
+                "section": "hpi",
+                "content": f"Post-consult patient unvoiced concern: {norm_u['clinical_summary']}",
+                "sources": [
+                    {
+                        "type": "transcript",
+                        "ref_id": unvoiced_entry.get("question_id", "q_unvoiced_concern_01"),
+                        "snippet": u_ans,
                     }
                 ],
                 "verification": "patient_reported",

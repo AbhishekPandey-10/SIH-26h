@@ -2,7 +2,12 @@ import React, { useState, useEffect } from 'react';
 import SummarySection from './SummarySection';
 import ConfirmPush from './ConfirmPush';
 import ContradictionPanel from './ContradictionPanel';
-import KioskCard from '../kiosk/KioskCard';
+import ClickToSource from './ClickToSource';
+import { DeltaView } from '../visualization/DeltaView';
+import { Timeline } from '../visualization/Timeline';
+import LabSparkline from '../visualization/LabSparkline';
+import { PatientSummaryCard } from '../patient/PatientSummaryCard';
+import { LabExplainer } from '../patient/LabExplainer';
 import {
   Stethoscope,
   FileCheck,
@@ -13,6 +18,12 @@ import {
   ShieldCheck,
   User,
   Calendar,
+  Activity,
+  HeartHandshake,
+  FileText,
+  TrendingUp,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 const SECTION_DISPLAY_MAP = {
@@ -36,6 +47,13 @@ export const SummaryView = ({
   const [polypharmacyAlerts, setPolypharmacyAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Phase 4 State Management
+  const [showVisualizations, setShowVisualizations] = useState(true);
+  const [showSummaryCard, setShowSummaryCard] = useState(false);
+  const [explainingLab, setExplainingLab] = useState(null);
+  const [activeSourceModal, setActiveSourceModal] = useState(null);
+  const [unvoicedConcern, setUnvoicedConcern] = useState(null);
 
   const fetchSummary = async () => {
     if (!sessionId) return;
@@ -71,6 +89,26 @@ export const SummaryView = ({
       } catch (polyErr) {
         console.warn('[SummaryView] Polypharmacy fetch warning:', polyErr);
       }
+
+      // 3. Fetch interview transcripts to inspect unvoiced concerns
+      try {
+        const trRes = await fetch(`/api/interview/transcripts/${sessionId}`);
+        if (trRes.ok) {
+          const turns = await trRes.json();
+          const unvoicedTurn = turns.find(
+            (t) => t.node_name === 'unvoiced_concern' || t.question_id === 'unvoiced_concern'
+          );
+          if (unvoicedTurn) {
+            setUnvoicedConcern({
+              text: unvoicedTurn.answer_text,
+              verbatim: unvoicedTurn.verbatim_voice || unvoicedTurn.answer_text,
+              timestamp: unvoicedTurn.timestamp,
+            });
+          }
+        }
+      } catch (trErr) {
+        console.warn('[SummaryView] Transcripts fetch warning:', trErr);
+      }
     } catch (err) {
       console.warn('[SummaryView] Summary fetch error:', err);
       setError(err.message || 'Unable to generate intake summary.');
@@ -87,6 +125,24 @@ export const SummaryView = ({
     setFields((prev) =>
       prev.map((f) => (f.field_id === updatedField.field_id ? updatedField : f))
     );
+  };
+
+  const handleSourceClick = (source) => {
+    if (!source) return;
+    setActiveSourceModal(source);
+  };
+
+  const handleTimelineNodeClick = (node) => {
+    if (node && node.source_ref) {
+      setActiveSourceModal(node.source_ref);
+    } else if (node && node.source_id) {
+      setActiveSourceModal({
+        type: node.lane === 'labs' ? 'document' : 'transcript',
+        ref_id: node.source_id,
+        document_id: node.source_id,
+        snippet: `${node.title}: ${node.detail || ''}`,
+      });
+    }
   };
 
   // Group fields by canonical section
@@ -109,7 +165,7 @@ export const SummaryView = ({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          marginBottom: '24px',
+          marginBottom: '20px',
           background: '#FFFFFF',
           padding: '20px 24px',
           borderRadius: '16px',
@@ -150,7 +206,7 @@ export const SummaryView = ({
                   borderRadius: '10px',
                 }}
               >
-                Dev 1 LLM Scribe + Dev 2 OCR
+                Phase 4 Multi-Visit Longitudinal + Patient Voice
               </span>
             </div>
             <div style={{ fontSize: '14px', color: '#64748B', marginTop: '4px' }}>
@@ -160,32 +216,202 @@ export const SummaryView = ({
           </div>
         </div>
 
-        <button
-          onClick={fetchSummary}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Patient Summary Card Trigger */}
+          <button
+            onClick={() => setShowSummaryCard(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 16px',
+              borderRadius: '10px',
+              background: '#059669',
+              border: 'none',
+              color: '#FFFFFF',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)',
+            }}
+          >
+            <FileText size={16} />
+            <span>Patient Summary Card (ABHA QR)</span>
+          </button>
+
+          {/* Regenerate Summary */}
+          <button
+            onClick={fetchSummary}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 16px',
+              borderRadius: '10px',
+              background: '#F1F5F9',
+              border: '1px solid #CBD5E1',
+              color: '#334155',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+            }}
+          >
+            <RefreshCw size={16} />
+            <span>Regenerate</span>
+          </button>
+        </div>
+      </div>
+
+      {/* UNVOICED CONCERN ALERT BANNER (If captured in kiosk or post-consult) */}
+      {unvoicedConcern && (
+        <div
           style={{
+            marginBottom: '20px',
+            padding: '16px 20px',
+            borderRadius: '14px',
+            background: 'linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%)',
+            border: '1.5px solid #F59E0B',
+            boxShadow: '0 4px 10px rgba(245, 158, 11, 0.1)',
             display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '10px 18px',
-            borderRadius: '10px',
-            background: '#F1F5F9',
-            border: '1px solid #CBD5E1',
-            color: '#334155',
-            fontWeight: 700,
-            fontSize: '13px',
-            cursor: 'pointer',
+            alignItems: 'flex-start',
+            gap: '14px',
           }}
         >
-          <RefreshCw size={16} />
-          <span>Regenerate Summary</span>
-        </button>
-      </div>
+          <div
+            style={{
+              background: '#D97706',
+              color: '#FFFFFF',
+              borderRadius: '10px',
+              padding: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginTop: '2px',
+            }}
+          >
+            <HeartHandshake size={20} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '14px', fontWeight: 800, color: '#92400E' }}>
+                PATIENT UNVOICED CONCERN (Recorded Post-Consult / Kiosk Voice)
+              </span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  background: '#FDE68A',
+                  color: '#78350F',
+                  padding: '1px 6px',
+                  borderRadius: '6px',
+                  fontWeight: 700,
+                }}
+              >
+                High Empathy Priority
+              </span>
+            </div>
+            <p style={{ margin: '6px 0 0 0', fontSize: '14px', color: '#78350F', lineHeight: '1.5' }}>
+              "{unvoicedConcern.text}"
+            </p>
+            {unvoicedConcern.verbatim && unvoicedConcern.verbatim !== unvoicedConcern.text && (
+              <div style={{ fontSize: '12px', color: '#B45309', marginTop: '4px', fontStyle: 'italic' }}>
+                Verbatim colloquial voice audio: "{unvoicedConcern.verbatim}"
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* TASK 2: CONTRADICTION RADAR PANEL */}
       <ContradictionPanel
         sessionId={sessionId}
         onContradictionResolved={fetchSummary}
       />
+
+      {/* PHASE 4: DELTA VIEW ("WHAT CHANGED" CARD) */}
+      <div style={{ marginBottom: '20px' }}>
+        <DeltaView
+          sessionId={sessionId}
+          onItemClick={(item) => {
+            if (item.source_ref) {
+              handleSourceClick(item.source_ref);
+            }
+          }}
+        />
+      </div>
+
+      {/* PHASE 4: LONGITUDINAL VISUALIZATIONS (TIMELINE + LAB SPARKLINES) */}
+      <div
+        style={{
+          marginBottom: '24px',
+          background: '#0F172A',
+          borderRadius: '16px',
+          border: '1px solid #1E293B',
+          overflow: 'hidden',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+        }}
+      >
+        {/* Visualizations Collapsible Bar */}
+        <div
+          onClick={() => setShowVisualizations((prev) => !prev)}
+          style={{
+            padding: '14px 20px',
+            background: '#1E293B',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Activity size={18} color="#10B981" />
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#F8FAFC' }}>
+              Longitudinal Clinical Timeline & Multi-Visit Lab Trends
+            </span>
+            <span
+              style={{
+                fontSize: '11px',
+                background: '#064E3B',
+                color: '#6EE7B7',
+                padding: '2px 8px',
+                borderRadius: '6px',
+                fontWeight: 600,
+              }}
+            >
+              4 Swim Lanes • Unit-Validated Sparklines
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94A3B8' }}>
+            <span style={{ fontSize: '12px' }}>{showVisualizations ? 'Hide Charts' : 'Show Charts'}</span>
+            {showVisualizations ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          </div>
+        </div>
+
+        {showVisualizations && (
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Timeline Swim Lanes */}
+            <Timeline
+              patientId={patientAbhaId || sessionId}
+              onNodeClick={handleTimelineNodeClick}
+            />
+
+            {/* Sparkline Multi-Visit Lab Trends */}
+            <LabSparkline
+              patientId={patientAbhaId || sessionId}
+              onExplainLab={(lab) => {
+                setExplainingLab({
+                  testName: lab.test_name || 'Lab Test',
+                  value: lab.value !== null ? `${lab.value} ${lab.unit || ''}` : '7.1%',
+                  unit: lab.unit || '%',
+                  entityId: lab.id || null,
+                });
+              }}
+              onSourceClick={handleSourceClick}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Loading State */}
       {loading && (
@@ -273,8 +499,84 @@ export const SummaryView = ({
           />
         </div>
       )}
+
+      {/* Patient Summary Card Modal */}
+      {showSummaryCard && (
+        <PatientSummaryCard
+          sessionId={sessionId}
+          patientName={patientName}
+          abhaId={patientAbhaId}
+          onClose={() => setShowSummaryCard(false)}
+        />
+      )}
+
+      {/* Lab Explainer Pop-up Modal */}
+      {explainingLab && (
+        <LabExplainer
+          isOpen={true}
+          testName={explainingLab.testName}
+          value={explainingLab.value}
+          unit={explainingLab.unit}
+          entityId={explainingLab.entityId}
+          onClose={() => setExplainingLab(null)}
+        />
+      )}
+
+      {/* Direct Source Inspector Modal (for Timeline / Sparkline clicks) */}
+      {activeSourceModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '20px',
+          }}
+          onClick={() => setActiveSourceModal(null)}
+        >
+          <div
+            style={{
+              background: '#FFFFFF',
+              borderRadius: '16px',
+              maxWidth: '800px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              padding: '24px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', margin: 0 }}>
+                Traceable Source Citation
+              </h3>
+              <button
+                onClick={() => setActiveSourceModal(null)}
+                style={{
+                  background: '#F1F5F9',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '6px 12px',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  color: '#475569',
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <ClickToSource singleSource={activeSourceModal} inline={false} />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default SummaryView;
+

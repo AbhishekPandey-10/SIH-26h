@@ -28,6 +28,14 @@ import { ContradictionPanel } from '../components/doctor/ContradictionPanel';
 import { RedFlagAlert } from '../components/interview/RedFlagAlert';
 import { StaffAlertPanel } from '../components/interview/StaffAlertPanel';
 
+// Phase 4: Dev 1 (Patient Info & Voice) + Dev 2 (Longitudinal Clinical Visualizations)
+import { PatientSummaryCard } from '../components/patient/PatientSummaryCard';
+import { LabExplainer } from '../components/patient/LabExplainer';
+import { UnvoicedConcern } from '../components/interview/UnvoicedConcern';
+import { DeltaView } from '../components/visualization/DeltaView';
+import { Timeline } from '../components/visualization/Timeline';
+import LabSparkline from '../components/visualization/LabSparkline';
+
 describe('Design System Constants and Configurations', () => {
   it('defines all Pan-India languages with native scripts including Punjabi, Odia, Assamese, and Urdu', () => {
     expect(LANGUAGES).toHaveLength(14);
@@ -99,5 +107,15 @@ describe('Design System Constants and Configurations', () => {
     expect(formatCitationText({ type: 'document', page_number: 2 })).toBe('From prescription (pg 2)');
     expect(formatCitationText({ type: 'document', ref_id: 'ent_lab_01', page_number: 1 })).toBe('From lab report (pg 1)');
   });
+
+  it('exports all Phase 4 Patient Info, Voice & Longitudinal Visualization components', () => {
+    expect(PatientSummaryCard).toBeDefined();
+    expect(LabExplainer).toBeDefined();
+    expect(UnvoicedConcern).toBeDefined();
+    expect(DeltaView).toBeDefined();
+    expect(Timeline).toBeDefined();
+    expect(LabSparkline).toBeDefined();
+  });
 });
+
 
