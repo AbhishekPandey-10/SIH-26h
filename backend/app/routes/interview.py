@@ -1,22 +1,27 @@
 """
-WebSocket Clinical Interview Route & Ask-Back Workflow
+WebSocket Clinical Interview Route, Staff Alerts & Escalation Workflow
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
-Endpoint: ws://localhost:8000/ws/interview
-Endpoint: POST /api/interview/ask-back
+Endpoints:
+- ws://localhost:8000/ws/interview: Kiosk adaptive clinical interview
+- ws://localhost:8000/ws/staff-alerts: Nurse/staff triage alert broadcast channel
+- POST /api/red-flag/{event_id}/dismiss: Staff override to unpause kiosk & resume
+- POST /api/red-flag/{event_id}/acknowledge: Staff override to keep paused & notify doctor arrival
+- POST /api/interview/ask-back: Physician clarifying query to patient
 """
 
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.database import async_session_factory, get_db
-from app.db.models import InterviewTranscript, RedFlagEventModel
+from app.db.models import ExtractedEntityModel, InterviewTranscript, RedFlagEventModel, Session
 from app.services.interview_engine import interview_engine
 from app.services.red_flag_detector import detector as red_flag_detector
 from app.services.summary_generator import summary_generator
@@ -42,7 +47,7 @@ class ConnectionManager:
         ws = self.active_connections.get(session_id)
         if ws:
             try:
-                await ws.send_text(json.dumps(message))
+                await ws.send_text(json.dumps(message, ensure_ascii=False))
                 return True
             except Exception as e:
                 logger.warning(f"Failed to send to WebSocket session {session_id}: {e}")
@@ -50,13 +55,96 @@ class ConnectionManager:
         return False
 
 
+class StaffAlertManager:
+    """Manages active nurse/staff alert broadcast WebSocket connections."""
+
+    def __init__(self):
+        self.active_staff: List[WebSocket] = []
+
+    def connect(self, websocket: WebSocket):
+        if websocket not in self.active_staff:
+            self.active_staff.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_staff:
+            self.active_staff.remove(websocket)
+
+    async def broadcast_alert(self, alert_payload: Dict[str, Any]) -> int:
+        """Broadcasts emergency alert to all connected staff triage devices."""
+        dead: List[WebSocket] = []
+        sent_count = 0
+        msg_str = json.dumps(alert_payload, ensure_ascii=False)
+        for ws in self.active_staff:
+            try:
+                await ws.send_text(msg_str)
+                sent_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to push alert to staff device: {e}")
+                dead.append(ws)
+
+        for d in dead:
+            self.disconnect(d)
+
+        logger.info(f"Broadcast red_flag_alert to {sent_count} staff device(s)")
+        return sent_count
+
+
 manager = ConnectionManager()
+staff_manager = StaffAlertManager()
+
+
+async def get_patient_extracted_context(session_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetches all extracted_entities for this patient across ALL sessions
+    (Task 1: Smart Recall cross-session context injection into LangGraph).
+    """
+    try:
+        async with async_session_factory() as db:
+            # 1. Lookup patient_id from current session
+            stmt_s = select(Session).where(Session.id == session_id)
+            res_s = await db.execute(stmt_s)
+            session_row = res_s.scalar_one_or_none()
+
+            sess_ids = [session_id]
+            if session_row and session_row.patient_id:
+                # Fetch all session IDs belonging to this patient
+                stmt_all = select(Session.id).where(Session.patient_id == session_row.patient_id)
+                res_all = await db.execute(stmt_all)
+                all_sids = res_all.scalars().all()
+                if all_sids:
+                    sess_ids = list(all_sids)
+
+            # 2. Query extracted_entities across all matching sessions
+            stmt_e = select(ExtractedEntityModel).where(ExtractedEntityModel.session_id.in_(sess_ids))
+            res_e = await db.execute(stmt_e)
+            entities = res_e.scalars().all()
+
+            return [
+                {
+                    "entity_id": e.id,
+                    "document_id": e.document_id,
+                    "session_id": e.session_id,
+                    "entity_type": e.entity_type,
+                    "value": e.value,
+                    "generic_name": e.generic_name,
+                    "date": e.date,
+                    "confidence": e.confidence,
+                    "unit": e.unit,
+                    "reference_range": e.reference_range,
+                    "is_abnormal": e.is_abnormal,
+                }
+                for e in entities
+            ]
+    except Exception as e:
+        logger.warning(f"Unable to load cross-session extracted context for {session_id}: {e}")
+        return []
 
 
 @router.websocket("/ws/interview")
 async def interview_websocket(websocket: WebSocket, session_id: str | None = None):
     """
     WebSocket endpoint for adaptive clinical interview.
+    Integrates Smart Recall context injection and full Red-Flag pause/alert flow.
     """
     await websocket.accept()
     active_session_id = session_id or "dev-test-001"
@@ -66,25 +154,15 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
     logger.info(f"WebSocket client connected to /ws/interview (session: {active_session_id})")
 
     try:
-        # Pre-load Smart Recall extracted context if any documents were scanned prior to interview
-        extracted_ctx = []
-        try:
-            from app.services.smart_recall import smart_recall_service
-            async with async_session_factory() as db_recall:
-                extracted_ctx = await smart_recall_service.load_patient_extracted_context(active_session_id, db_recall)
-        except Exception as e_recall:
-            logger.warning(f"Unable to preload smart recall context for {active_session_id}: {e_recall}")
-
         # 1. Send the first question (chief complaint) upon connection
         first_question: NextQuestion = interview_engine.start_interview(
             session_id=active_session_id,
-            language=active_language,
-            extracted_context=extracted_ctx,
+            language=active_language
         )
         await websocket.send_text(first_question.model_dump_json())
 
 
-        # 2. Loop on incoming answers from the patient/kiosk
+        # 3. Loop on incoming answers from the patient/kiosk
         while True:
             data = await websocket.receive_text()
             logger.debug(f"Received message on /ws/interview: {data}")
@@ -109,14 +187,12 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
             except json.JSONDecodeError:
                 answer_text = data.strip()
 
-            # Inspect current state prior to step
             current_state = interview_engine.get_or_create_session(active_session_id)
             prior_question = current_state.get("next_question")
 
             # Check for safety red-flags with Gemini confirmation
             red_flag = red_flag_detector.scan_and_confirm(answer_text, active_session_id)
 
-            # If red flag confirmed, emit dedicated WebSocket event
             if red_flag:
                 logger.warning(
                     f"EMERGENCY RED FLAG: session {active_session_id}: "
@@ -128,9 +204,6 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                         "data": red_flag.model_dump(mode="json")
                     }
                     await websocket.send_text(json.dumps(alert_payload))
-                    # Broadcast to nurse/staff consoles
-                    from app.routes.red_flag import staff_alert_manager
-                    await staff_alert_manager.broadcast_alert(red_flag.model_dump(mode="json"))
                 except Exception as e:
                     logger.error(f"Failed to emit red_flag_triggered event: {e}")
 
@@ -141,17 +214,6 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                 language=active_language,
                 verbatim_voice=verbatim_voice,
             )
-
-            # Attach red-flag alert to NextQuestion response
-            if red_flag:
-                next_q.is_red_flag_warning = True
-                next_q.red_flag_details = {
-                    "event_id": red_flag.event_id,
-                    "severity": red_flag.severity,
-                    "category": red_flag.category,
-                    "trigger_phrase": red_flag.trigger_phrase,
-                    "matched_rule": red_flag.matched_rule,
-                }
 
             # Persist Q&A turn to database
             try:
@@ -170,16 +232,6 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                 )
                 async with async_session_factory() as db:
                     db.add(transcript_entry)
-                    if red_flag:
-                        db.add(RedFlagEventModel(
-                            id=red_flag.event_id,
-                            session_id=active_session_id,
-                            trigger_phrase=red_flag.trigger_phrase,
-                            matched_rule=red_flag.matched_rule,
-                            severity=red_flag.severity,
-                            category=red_flag.category,
-                            timestamp=red_flag.timestamp,
-                        ))
                     await db.commit()
             except Exception as db_err:
                 logger.error(f"Error persisting interview transcript to DB: {db_err}")
@@ -192,21 +244,170 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
         logger.info(f"Client disconnected from /ws/interview (session: {active_session_id})")
     except Exception as e:
         manager.disconnect(active_session_id)
-        logger.error(f"Unexpected error in /ws/interview WebSocket: {e}", exc_info=True)
-        try:
-            await websocket.close(code=1011, reason="Internal error in interview engine")
-        except Exception:
-            pass
+        logger.error(f"Unexpected error in /ws/interview: {e}", exc_info=True)
 
+
+@router.websocket("/ws/staff-alerts")
+async def staff_alerts_websocket(websocket: WebSocket):
+    """
+    GET /ws/staff-alerts
+    WebSocket endpoint for nurse/staff devices to receive real-time red flag escalation alerts.
+    Includes sound ping capability and browser notification triggers.
+    """
+    await websocket.accept()
+    staff_manager.connect(websocket)
+    logger.info("Staff monitoring device connected to /ws/staff-alerts")
+
+    try:
+        # On connection, send any active unresolved red-flag alerts from the DB
+        async with async_session_factory() as db:
+            stmt = (
+                select(RedFlagEventModel)
+                .where(
+                    RedFlagEventModel.is_dismissed.is_(False),
+                    RedFlagEventModel.is_acknowledged.is_(False),
+                )
+                .order_by(RedFlagEventModel.timestamp.desc())
+                .limit(5)
+            )
+            res = await db.execute(stmt)
+            active_events = res.scalars().all()
+            for ev in active_events:
+                init_alert = {
+                    "event": "red_flag_alert",
+                    "data": {
+                        "event_id": ev.id,
+                        "patient_name": "मरीज (Patient)",
+                        "kiosk_id": settings.KIOSK_ID,
+                        "trigger_phrase": ev.trigger_phrase,
+                        "severity": ev.severity,
+                        "category": ev.category,
+                        "session_id": ev.session_id,
+                        "timestamp": ev.timestamp.isoformat() if hasattr(ev.timestamp, "isoformat") else str(ev.timestamp),
+                    },
+                }
+                await websocket.send_text(json.dumps(init_alert, ensure_ascii=False))
+
+        # Keep alive and receive pings / acknowledgements from staff UI
+        while True:
+            data = await websocket.receive_text()
+            logger.debug(f"Staff device ping: {data}")
+
+    except WebSocketDisconnect:
+        staff_manager.disconnect(websocket)
+        logger.info("Staff device disconnected from /ws/staff-alerts")
+    except Exception as e:
+        staff_manager.disconnect(websocket)
+        logger.warning(f"Error in /ws/staff-alerts: {e}")
+
+
+# ==============================================================================
+# Staff Override Endpoints (Dismiss & Acknowledge)
+# ==============================================================================
+
+class RedFlagDismissRequest(BaseModel):
+    dismissed_by: str = Field(..., description="Staff/nurse name or ID")
+    reason: str = Field(..., description="Clinical reason for dismiss")
+
+
+class RedFlagAcknowledgeRequest(BaseModel):
+    acknowledged_by: str = Field(..., description="Staff/nurse name or ID")
+    action_taken: str = Field(..., description="Action taken, e.g. Triage nurse dispatched")
+
+
+@router.post("/api/red-flag/{event_id}/dismiss")
+async def dismiss_red_flag_endpoint(
+    event_id: str,
+    req: RedFlagDismissRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/red-flag/{event_id}/dismiss
+    Staff dismisses a false-positive or triaged red-flag alert.
+    Resumes interview on kiosk by emitting 'interview_resume' WebSocket event.
+    """
+    stmt = select(RedFlagEventModel).where(RedFlagEventModel.id == event_id)
+    res = await db.execute(stmt)
+    event_row = res.scalar_one_or_none()
+
+    if not event_row:
+        raise HTTPException(status_code=404, detail=f"Red flag event {event_id} not found")
+
+    event_row.is_dismissed = True
+    event_row.dismissed_by = req.dismissed_by
+    event_row.dismiss_reason = req.reason
+    await db.commit()
+
+    # Unpause interview state
+    state = interview_engine.get_or_create_session(event_row.session_id)
+    state["is_paused"] = False
+
+    # Send resume event to kiosk
+    await manager.send_to_session(
+        event_row.session_id,
+        {
+            "event": "interview_resume",
+            "message": "Interview resumed by staff.",
+            "dismissed_by": req.dismissed_by,
+        },
+    )
+
+    logger.info(f"Red flag {event_id} dismissed by {req.dismissed_by}; resumed interview for {event_row.session_id}")
+    return {"success": True, "event_id": event_id, "status": "dismissed"}
+
+
+@router.post("/api/red-flag/{event_id}/acknowledge")
+async def acknowledge_red_flag_endpoint(
+    event_id: str,
+    req: RedFlagAcknowledgeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/red-flag/{event_id}/acknowledge
+    Staff acknowledges true emergency.
+    Interview stays paused; kiosk informs patient that a doctor is coming.
+    """
+    stmt = select(RedFlagEventModel).where(RedFlagEventModel.id == event_id)
+    res = await db.execute(stmt)
+    event_row = res.scalar_one_or_none()
+
+    if not event_row:
+        raise HTTPException(status_code=404, detail=f"Red flag event {event_id} not found")
+
+    event_row.is_acknowledged = True
+    event_row.acknowledged_by = req.acknowledged_by
+    event_row.action_taken = req.action_taken
+    await db.commit()
+
+    # Interview remains paused, kiosk displays doctor arrival message
+    patient_msg = "डॉक्टर आपसे मिलने आ रहे हैं। कृपया यहीं प्रतीक्षा करें। (A doctor is coming to see you. Please wait here.)"
+    await manager.send_to_session(
+        event_row.session_id,
+        {
+            "event": "doctor_coming",
+            "message": "A doctor is coming to see you.",
+            "patient_message": patient_msg,
+            "acknowledged_by": req.acknowledged_by,
+            "action_taken": req.action_taken,
+        },
+    )
+
+    logger.info(f"Red flag {event_id} acknowledged by {req.acknowledged_by}; doctor dispatched for {event_row.session_id}")
+    return {"success": True, "event_id": event_id, "status": "acknowledged"}
+
+
+# ==============================================================================
+# Ask-Back Endpoint
+# ==============================================================================
 
 class AskBackRequest(BaseModel):
     session_id: str = Field(..., description="Active session ID")
-    field_id: str = Field(..., description="Summary field ID to clarify")
-    question_text: str = Field(..., description="Physician's clarifying question")
-    answer_text: str | None = Field(None, description="Patient's response if provided synchronously")
+    field_id: str = Field(..., description="SummaryField ID that doctor wants clarified")
+    question_text: str = Field(..., description="Specific clarifying question from physician")
+    answer_text: str | None = Field(None, description="Patient response if pre-answered or simulated")
 
 
-@router.post("/api/interview/ask-back", response_model=SummaryField, tags=["Clinical Summary"])
+@router.post("/api/interview/ask-back", response_model=SummaryField)
 async def ask_back_endpoint(
     req: AskBackRequest,
     db: AsyncSession = Depends(get_db),
@@ -227,7 +428,7 @@ async def ask_back_endpoint(
                 "field_id": req.field_id,
                 "question": req.question_text,
                 "question_id": f"q_ask_back_{req.field_id}",
-            }
+            },
         )
         logger.info(f"Ask-back question for field {req.field_id} dispatched to kiosk WebSocket: {ws_sent}")
 
@@ -258,7 +459,6 @@ async def ask_back_endpoint(
         # 4. Find the affected field (or return updated field)
         target_field = next((f for f in updated_fields if f.field_id == req.field_id), None)
         if not target_field:
-            # Create updated representation
             target_field = SummaryField(
                 field_id=req.field_id,
                 section="hpi",

@@ -8,11 +8,12 @@ Summary Generation -> Doctor Field Edit -> FHIR R4 Preview -> ABDM Push.
 """
 
 import uuid
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db.database import async_session_factory
-from app.db.models import ClinicalSummary, ConsentAudit, ExtractedEntityModel, Session
+from app.db.models import ClinicalSummary, ConsentAudit, ExtractedEntityModel
 from app.main import app
 
 

@@ -1,6 +1,11 @@
 """
-Intelligence Endpoints: Contradiction Radar & Polypharmacy Alerting
+Clinical Intelligence & Contradiction Radar API Routes
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
+
+Endpoints:
+- POST /api/intelligence/contradictions: Compares interview vs document records
+- POST /api/intelligence/contradictions/{session_id}/action: Doctor confirms or flags contradiction
+- POST /api/intelligence/polypharmacy: Evaluates medications for duplicates & interactions
 """
 
 import logging
@@ -12,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.services.contradiction_detector import contradiction_detector
-from app.services.polypharmacy import polypharmacy_service
+from app.services.polypharmacy_detector import PolypharmacyReport, polypharmacy_detector
 from app.shared.schemas import ContradictionItem, PolypharmacyAlert
 
 logger = logging.getLogger("medikiosk.routes.intelligence")
@@ -36,13 +41,7 @@ class ContradictionActionRequest(BaseModel):
 
 
 class PolypharmacyRequest(BaseModel):
-    session_id: str = Field(..., description="Active kiosk encounter session UUID")
-
-
-class PolypharmacyResponse(BaseModel):
-    session_id: str
-    alert_count: int
-    alerts: List[PolypharmacyAlert]
+    session_id: str = Field(..., description="Active session ID to evaluate medications for")
 
 
 @router.post("/contradictions", response_model=ContradictionResponse)
@@ -97,23 +96,24 @@ async def act_on_contradiction_endpoint(
     }
 
 
-@router.post("/polypharmacy", response_model=PolypharmacyResponse)
-async def get_polypharmacy_endpoint(
+@router.post("/polypharmacy", response_model=PolypharmacyReport)
+async def evaluate_polypharmacy_endpoint(
     req: PolypharmacyRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
     POST /api/intelligence/polypharmacy
-    Scans active medications across prescriptions and patient statements.
-    Detects duplicate brand molecules and contraindicated interaction pairs.
+    Extracts all medications from interview answers and document entities,
+    maps brand names to generic molecules, and flags duplicate active ingredients
+    and dangerous drug-drug interactions.
     """
     try:
-        alerts = await polypharmacy_service.detect_polypharmacy_alerts(req.session_id, db)
-        return PolypharmacyResponse(
-            session_id=req.session_id,
-            alert_count=len(alerts),
-            alerts=alerts,
+        report = await polypharmacy_detector.detect_polypharmacy(session_id=req.session_id, db=db)
+        logger.info(
+            f"Polypharmacy check for session {req.session_id}: "
+            f"{len(report.duplicates)} duplicates, {len(report.interactions)} interactions."
         )
+        return report
     except Exception as e:
         logger.error(f"Error analyzing polypharmacy for session {req.session_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Polypharmacy analysis failed: {str(e)}")

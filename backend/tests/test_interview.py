@@ -165,7 +165,7 @@ def test_websocket_interview_and_red_flag_event():
 
         # Next comes the NextQuestion response
         next_q_msg = ws.receive_json()
-        assert next_q_msg["section"] == "pmh"
+        assert next_q_msg["section"] in ("emergency_hold", "pmh")
         assert next_q_msg["is_red_flag_warning"] is True
         assert next_q_msg["red_flag_details"]["category"] == "cardiac"
 

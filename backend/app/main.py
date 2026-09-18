@@ -73,6 +73,8 @@ app.include_router(red_flag_router)
 
 
 
+
+
 @app.get("/health", tags=["System"])
 async def health_check() -> dict[str, Any]:
     """Health check endpoint for container orchestrators and Kiosk PWA."""

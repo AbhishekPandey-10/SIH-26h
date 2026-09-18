@@ -21,7 +21,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import ClinicalSummary, ExtractedEntityModel, InterviewTranscript
+from app.db.models import (
+    ClinicalSummary,
+    ExtractedEntityModel,
+    InterviewTranscript,
+    RedFlagEventModel,
+)
+from app.services.polypharmacy_detector import polypharmacy_detector
 from app.shared.schemas import SummaryField, SummarySource
 
 logger = logging.getLogger("medikiosk.summary_gen")
@@ -116,7 +122,7 @@ class SummaryGenerator:
         # 4. Source-Tagging Validation (Post-processing)
         validated_fields = self._validate_and_tag_sources(raw_fields, transcripts, entities)
 
-        # Append compact 'Changes since last visit' section
+        # 5. Append compact 'Changes since last visit' section
         try:
             from app.services.contradiction_detector import contradiction_detector
             contradictions = await contradiction_detector.detect_contradictions(session_id, db)
@@ -133,7 +139,59 @@ class SummaryGenerator:
         except Exception as e:
             logger.warning(f"Unable to append changes_since_last_visit section: {e}")
 
-        # 5. Persist into ClinicalSummary table
+        # 6. Check and Attach Emergency Red-Flag Banner if triggered
+        try:
+            stmt_rf = select(RedFlagEventModel).where(RedFlagEventModel.session_id == session_id)
+            res_rf = await db.execute(stmt_rf)
+            red_flags = res_rf.scalars().all()
+            for rf in reversed(red_flags):
+                rf_field = SummaryField(
+                    field_id=f"sf_rf_{rf.id}",
+                    section="chief_complaint",
+                    content=(
+                        f"⚠️ [EMERGENCY RED FLAG TRIGGERED] {rf.trigger_phrase.upper()} ({rf.category.upper()}) — "
+                        f"Matched rule: {rf.matched_rule}. Immediate medical evaluation required."
+                    ),
+                    sources=[
+                        SummarySource(
+                            type="transcript",
+                            ref_id=rf.id,
+                            snippet=rf.trigger_phrase,
+                        )
+                    ],
+                    verification="conflicting" if rf.is_dismissed else "patient_reported",
+                )
+                validated_fields.insert(0, rf_field)
+        except Exception as rf_err:
+            logger.warning(f"Error checking red-flags for summary: {rf_err}")
+
+        # 7. Check and Attach Polypharmacy & Drug Interaction Alerts
+        try:
+            poly_report = await polypharmacy_detector.detect_polypharmacy(session_id, db)
+            alert_lines = []
+            for d in poly_report.duplicates:
+                alert_lines.append(f"⚠️ {d.message}")
+            for i in poly_report.interactions:
+                alert_lines.append(f"⚡ {i.message} ({i.note})")
+
+            if alert_lines:
+                poly_content = "POLYPHARMACY & DRUG INTERACTION ALERTS:\n" + "\n".join(alert_lines)
+                poly_field = SummaryField(
+                    field_id=f"sf_poly_{uuid.uuid4().hex[:6]}",
+                    section="medications",
+                    content=poly_content,
+                    sources=[],
+                    verification="needs_confirmation",
+                )
+                med_idx = next((idx for idx, f in enumerate(validated_fields) if f.section == "medications"), -1)
+                if med_idx >= 0:
+                    validated_fields.insert(med_idx, poly_field)
+                else:
+                    validated_fields.append(poly_field)
+        except Exception as poly_err:
+            logger.warning(f"Error checking polypharmacy for summary: {poly_err}")
+
+        # 8. Persist into ClinicalSummary table
         try:
             # Check existing summary
             stmt_s = select(ClinicalSummary).where(ClinicalSummary.session_id == session_id)

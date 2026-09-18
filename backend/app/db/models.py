@@ -252,6 +252,9 @@ class RedFlagEventModel(Base):
     dismissed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     dismiss_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    acknowledged_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class FHIRPushQueue(Base):

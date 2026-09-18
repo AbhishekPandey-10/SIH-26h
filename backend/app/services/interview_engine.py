@@ -30,8 +30,11 @@ class InterviewState(TypedDict, total=False):
     chief_complaint_category: str  # "pain" | "general" | "psych" | "obgyn"
     asked_questions: list[dict[str, Any]]
     answers: list[dict[str, Any]]
-    extracted_context: list[dict[str, Any]]  # filled later by Smart Recall
+    extracted_context: list[dict[str, Any]]  # filled by Smart Recall
     red_flags_triggered: list[dict[str, Any]]
+    confirmed_facts: list[dict[str, Any]]  # facts confirmed/corrected by patient
+    is_paused: bool
+    paused_reason: str | None
 
     # Step navigation helpers
     socrates_axis_index: int
@@ -259,15 +262,86 @@ def node_obgyn_history(state: InterviewState) -> InterviewState:
 
 
 def node_pmh(state: InterviewState) -> InterviewState:
-    """Past Medical History."""
+    """Past Medical History with Smart Recall."""
     lang = state.get("language", "hi")
     cc = state.get("chief_complaint", "")
     answers = state.get("answers", [])
+    extracted_context = state.get("extracted_context", [])
+
+    # Check for existing diagnosis / condition facts
+    pmh_entities = [
+        e for e in extracted_context
+        if e.get("entity_type") in ("diagnosis", "condition", "pmh") or "diag" in e.get("entity_type", "")
+    ]
+
+    if pmh_entities:
+        best_diag = max(pmh_entities, key=lambda x: float(x.get("confidence", 0.0)))
+        conf = float(best_diag.get("confidence", 0.0))
+        diag_val = best_diag.get("value", "")
+
+        if conf > 0.8:
+            # Rule: Confidence > 0.8 -> confirm briefly
+            if lang == "en":
+                q_text = f"Your records show a history of {diag_val} — is that still ongoing or resolved?"
+                opts = ["Yes, still ongoing", "Resolved / Cured", "Under control with medication"]
+            else:
+                q_text = f"आपके पिछले रिकॉर्ड में {diag_val} दर्ज है — क्या यह अभी भी है? (Your records show {diag_val} — still ongoing?)"
+                opts = ["हाँ, अभी भी है (Ongoing)", "नहीं, अब ठीक है (Resolved)", "दवाई से नियंत्रण में है"]
+
+            nq = NextQuestion(
+                question_id="q_pmh_confirm_01",
+                text=q_text,
+                input_type="choice",
+                options=opts,
+                section="pmh",
+                progress_pct=45.0,
+                metadata={
+                    "is_smart_recall": True,
+                    "recall_mode": "confirm_known_fact",
+                    "confidence": conf,
+                    "target_entity": diag_val,
+                    "entity_id": best_diag.get("entity_id"),
+                },
+            )
+            asked = list(state.get("asked_questions", []))
+            asked.append(nq.model_dump())
+            return {"current_node": "pmh", "next_question": nq, "asked_questions": asked}
+
+        elif 0.5 <= conf <= 0.8:
+            # Rule: Confidence 0.5 - 0.8 -> rephrase as verification
+            if lang == "en":
+                q_text = f"Our hospital records mention possible history of {diag_val}. Could you please confirm?"
+                opts = ["Yes, confirmed", "No, never had this", "Not sure"]
+            else:
+                q_text = f"रिकॉर्ड में {diag_val} का उल्लेख है। क्या आप इसकी पुष्टि कर सकते हैं?"
+                opts = ["हाँ, पुष्टि करता हूँ", "नहीं, ऐसा नहीं है", "निश्चित नहीं"]
+
+            nq = NextQuestion(
+                question_id="q_pmh_verify_01",
+                text=q_text,
+                input_type="choice",
+                options=opts,
+                section="pmh",
+                progress_pct=45.0,
+                metadata={
+                    "is_smart_recall": True,
+                    "recall_mode": "rephrase_verification",
+                    "confidence": conf,
+                    "target_entity": diag_val,
+                    "entity_id": best_diag.get("entity_id"),
+                },
+            )
+            asked = list(state.get("asked_questions", []))
+            asked.append(nq.model_dump())
+            return {"current_node": "pmh", "next_question": nq, "asked_questions": asked}
+
+    # Default / Confidence < 0.5 -> ask normally
     q_data = question_generator.generate_question(
         current_section="pmh",
         chief_complaint=cc,
         context=answers,
         language=lang,
+        extracted_context=extracted_context,
     )
     nq = NextQuestion(
         question_id="q_pmh_01",
@@ -288,15 +362,86 @@ def node_pmh(state: InterviewState) -> InterviewState:
 
 
 def node_medications(state: InterviewState) -> InterviewState:
-    """Medications intake."""
+    """Medications intake with Smart Recall."""
     lang = state.get("language", "hi")
     cc = state.get("chief_complaint", "")
     answers = state.get("answers", [])
+    extracted_context = state.get("extracted_context", [])
+
+    # Check for existing medication facts
+    med_entities = [
+        e for e in extracted_context
+        if e.get("entity_type") == "medication" or e.get("generic_name")
+    ]
+
+    if med_entities:
+        best_med = max(med_entities, key=lambda x: float(x.get("confidence", 0.0)))
+        conf = float(best_med.get("confidence", 0.0))
+        med_val = best_med.get("generic_name") or best_med.get("value", "")
+
+        if conf > 0.8:
+            # Rule: Confidence > 0.8 -> confirm briefly
+            if lang == "en":
+                q_text = f"Your records show you take {med_val} — is that still current?"
+                opts = ["Yes, still taking it", "No, stopped taking it", "Dose has changed", "Taking other medications too"]
+            else:
+                q_text = f"आपके पिछले रिकॉर्ड के अनुसार आप {med_val} लेते हैं — क्या यह अभी भी जारी है? (Your records show you take {med_val} — is that still current?)"
+                opts = ["हाँ, अभी भी ले रहा हूँ (Yes, still current)", "नहीं, बंद कर दी है (Stopped)", "डोज़ बदल गई है (Dose changed)", "अन्य दवाइयाँ भी हैं"]
+
+            nq = NextQuestion(
+                question_id="q_med_confirm_01",
+                text=q_text,
+                input_type="choice",
+                options=opts,
+                section="medications",
+                progress_pct=58.0,
+                metadata={
+                    "is_smart_recall": True,
+                    "recall_mode": "confirm_known_fact",
+                    "confidence": conf,
+                    "target_entity": med_val,
+                    "entity_id": best_med.get("entity_id"),
+                },
+            )
+            asked = list(state.get("asked_questions", []))
+            asked.append(nq.model_dump())
+            return {"current_node": "medications", "next_question": nq, "asked_questions": asked}
+
+        elif 0.5 <= conf <= 0.8:
+            # Rule: Confidence 0.5 - 0.8 -> rephrase as verification
+            if lang == "en":
+                q_text = f"Our hospital records mention you may be taking {med_val}. Could you please verify if you take this?"
+                opts = ["Yes, I take this", "No, I do not take this", "Taking different medicine"]
+            else:
+                q_text = f"रिकॉर्ड में {med_val} का उल्लेख है। क्या आप पुष्टि कर सकते हैं कि आप यह दवाई लेते हैं?"
+                opts = ["हाँ, यह दवाई लेता हूँ", "नहीं, यह नहीं लेता", "कोई अन्य दवाई लेता हूँ"]
+
+            nq = NextQuestion(
+                question_id="q_med_verify_01",
+                text=q_text,
+                input_type="choice",
+                options=opts,
+                section="medications",
+                progress_pct=58.0,
+                metadata={
+                    "is_smart_recall": True,
+                    "recall_mode": "rephrase_verification",
+                    "confidence": conf,
+                    "target_entity": med_val,
+                    "entity_id": best_med.get("entity_id"),
+                },
+            )
+            asked = list(state.get("asked_questions", []))
+            asked.append(nq.model_dump())
+            return {"current_node": "medications", "next_question": nq, "asked_questions": asked}
+
+    # Default / Confidence < 0.5 -> ask normally
     q_data = question_generator.generate_question(
         current_section="medications",
         chief_complaint=cc,
         context=answers,
         language=lang,
+        extracted_context=extracted_context,
     )
     nq = NextQuestion(
         question_id="q_med_01",
@@ -314,6 +459,7 @@ def node_medications(state: InterviewState) -> InterviewState:
     asked = list(state.get("asked_questions", []))
     asked.append(nq.model_dump())
     return {"current_node": "medications", "next_question": nq, "asked_questions": asked}
+
 
 
 def node_allergies(state: InterviewState) -> InterviewState:
@@ -533,7 +679,12 @@ class InterviewEngine:
         self.sessions: dict[str, InterviewState] = {}
         self.graph = build_interview_graph()
 
-    def get_or_create_session(self, session_id: str, language: str = "hi") -> InterviewState:
+    def get_or_create_session(
+        self,
+        session_id: str,
+        language: str = "hi",
+        extracted_context: list[dict[str, Any]] | None = None,
+    ) -> InterviewState:
         if session_id not in self.sessions:
             self.sessions[session_id] = {
                 "session_id": session_id,
@@ -543,13 +694,18 @@ class InterviewEngine:
                 "chief_complaint_category": "general",
                 "asked_questions": [],
                 "answers": [],
-                "extracted_context": [],
+                "extracted_context": extracted_context or [],
                 "red_flags_triggered": [],
+                "confirmed_facts": [],
+                "is_paused": False,
+                "paused_reason": None,
                 "socrates_axis_index": 0,
                 "last_answer": None,
                 "next_question": None,
                 "is_complete": False,
             }
+        elif extracted_context:
+            self.sessions[session_id]["extracted_context"] = extracted_context
         return self.sessions[session_id]
 
     def start_interview(
@@ -558,7 +714,7 @@ class InterviewEngine:
         language: str = "hi",
         extracted_context: list[dict[str, Any]] | None = None,
     ) -> NextQuestion:
-        state = self.get_or_create_session(session_id, language)
+        state = self.get_or_create_session(session_id, language, extracted_context)
         state["language"] = language
         if extracted_context is not None:
             state["extracted_context"] = extracted_context
@@ -582,12 +738,38 @@ class InterviewEngine:
         if language:
             state["language"] = language
 
+        # If paused by emergency red-flag, do not advance until resumed
+        paused_q = state.get("next_question")
+        if state.get("is_paused") and paused_q is not None:
+            return paused_q
+
         curr_node = state.get("current_node", "chief_complaint")
         state["last_answer"] = answer_text
 
         # Record answer
         answers = list(state.get("answers", []))
         last_q = state.get("next_question")
+
+        # Track Smart Recall fact verification / confirmation
+        if last_q and last_q.metadata and last_q.metadata.get("is_smart_recall"):
+            target_entity = last_q.metadata.get("target_entity", "")
+            is_confirmed = any(
+                pos in answer_text.lower()
+                for pos in ["हाँ", "yes", "still", "current", "जारी", "लेता हूँ", "हूँ", "ongoing"]
+            ) and not any(
+                neg in answer_text.lower()
+                for neg in ["नहीं", "no", "बंद", "stopped", "not"]
+            )
+            confirmed_facts = list(state.get("confirmed_facts", []))
+            confirmed_facts.append({
+                "entity": target_entity,
+                "entity_id": last_q.metadata.get("entity_id"),
+                "status": "confirmed" if is_confirmed else "corrected",
+                "patient_answer": answer_text,
+                "recall_mode": last_q.metadata.get("recall_mode"),
+            })
+            state["confirmed_facts"] = confirmed_facts
+
         answers.append({
             "node": curr_node,
             "question_id": last_q.question_id if last_q else "unknown",
@@ -597,6 +779,7 @@ class InterviewEngine:
             "language": state["language"],
         })
         state["answers"] = answers
+
 
         # State transitions
         if curr_node == "chief_complaint":
