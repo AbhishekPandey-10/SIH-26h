@@ -17,6 +17,7 @@ from app.db.database import init_db
 from app.routes.documents import router as documents_router
 from app.routes.documents import ws_router as scan_ws_router
 from app.routes.fhir import router as fhir_router
+from app.routes.intelligence import router as intelligence_router
 from app.routes.interview import router as interview_router
 from app.routes.session import router as session_router
 from app.routes.summary import router as summary_router
@@ -66,6 +67,7 @@ app.include_router(summary_router)
 app.include_router(fhir_router)
 app.include_router(documents_router)
 app.include_router(scan_ws_router)
+app.include_router(intelligence_router)
 
 
 @app.get("/health", tags=["System"])

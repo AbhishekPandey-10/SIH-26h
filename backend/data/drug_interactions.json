@@ -1,0 +1,134 @@
+[
+  {
+    "drug_a": "warfarin",
+    "drug_b": "aspirin",
+    "severity": "high",
+    "note": "Interaction risk: increased bleeding risk due to dual anticoagulation and antiplatelet effect"
+  },
+  {
+    "drug_a": "metformin",
+    "drug_b": "contrast_dye",
+    "severity": "high",
+    "note": "Interaction risk: lactic acidosis risk and acute renal failure with iodinated contrast"
+  },
+  {
+    "drug_a": "metformin",
+    "drug_b": "contrast",
+    "severity": "high",
+    "note": "Interaction risk: lactic acidosis risk with radiographic contrast"
+  },
+  {
+    "drug_a": "aspirin",
+    "drug_b": "clopidogrel",
+    "severity": "high",
+    "note": "Interaction risk: elevated major gastrointestinal and systemic bleeding risk"
+  },
+  {
+    "drug_a": "methotrexate",
+    "drug_b": "ibuprofen",
+    "severity": "high",
+    "note": "Interaction risk: severe methotrexate bone marrow toxicity due to reduced renal clearance"
+  },
+  {
+    "drug_a": "methotrexate",
+    "drug_b": "aspirin",
+    "severity": "high",
+    "note": "Interaction risk: methotrexate toxicity from displacement of protein binding and renal clearance"
+  },
+  {
+    "drug_a": "spironolactone",
+    "drug_b": "ramipril",
+    "severity": "high",
+    "note": "Interaction risk: severe hyperkalemia risk; requires close electrolyte monitoring"
+  },
+  {
+    "drug_a": "spironolactone",
+    "drug_b": "telmisartan",
+    "severity": "high",
+    "note": "Interaction risk: severe hyperkalemia risk from dual potassium retention"
+  },
+  {
+    "drug_a": "tramadol",
+    "drug_b": "escitalopram",
+    "severity": "high",
+    "note": "Interaction risk: serotonin syndrome risk, autonomic instability, and lowered seizure threshold"
+  },
+  {
+    "drug_a": "tramadol",
+    "drug_b": "fluoxetine",
+    "severity": "high",
+    "note": "Interaction risk: serotonin syndrome and central nervous system toxicity"
+  },
+  {
+    "drug_a": "ciprofloxacin",
+    "drug_b": "theophylline",
+    "severity": "high",
+    "note": "Interaction risk: theophylline toxicity (seizures, cardiac arrhythmias) due to CYP1A2 inhibition"
+  },
+  {
+    "drug_a": "amiodarone",
+    "drug_b": "warfarin",
+    "severity": "high",
+    "note": "Interaction risk: profound INR elevation and hemorrhage risk"
+  },
+  {
+    "drug_a": "digoxin",
+    "drug_b": "amiodarone",
+    "severity": "high",
+    "note": "Interaction risk: fatal digoxin toxicity due to P-glycoprotein and clearance inhibition"
+  },
+  {
+    "drug_a": "atorvastatin",
+    "drug_b": "clarithromycin",
+    "severity": "high",
+    "note": "Interaction risk: severe rhabdomyolysis and myopathy risk via CYP3A4 inhibition"
+  },
+  {
+    "drug_a": "simvastatin",
+    "drug_b": "gemfibrozil",
+    "severity": "high",
+    "note": "Interaction risk: acute myopathy and rhabdomyolysis"
+  },
+  {
+    "drug_a": "sildenafil",
+    "drug_b": "nitroglycerin",
+    "severity": "high",
+    "note": "Interaction risk: severe, life-threatening refractory hypotension and syncope"
+  },
+  {
+    "drug_a": "fluconazole",
+    "drug_b": "warfarin",
+    "severity": "high",
+    "note": "Interaction risk: marked elevation of prothrombin time (INR) and internal bleeding"
+  },
+  {
+    "drug_a": "lithium",
+    "drug_b": "ibuprofen",
+    "severity": "high",
+    "note": "Interaction risk: acute lithium toxicity due to NSAID-induced reduction of renal blood flow"
+  },
+  {
+    "drug_a": "phenytoin",
+    "drug_b": "warfarin",
+    "severity": "high",
+    "note": "Interaction risk: erratic anticoagulation and altered phenytoin blood levels"
+  },
+  {
+    "drug_a": "linezolid",
+    "drug_b": "escitalopram",
+    "severity": "high",
+    "note": "Interaction risk: toxic serotonin syndrome due to non-selective MAO inhibition by linezolid"
+  },
+  {
+    "drug_a": "aceclofenac",
+    "drug_b": "aspirin",
+    "severity": "high",
+    "note": "Interaction risk: additive gastrointestinal ulceration and renal impairment"
+  },
+  {
+    "drug_a": "diclofenac",
+    "drug_b": "warfarin",
+    "severity": "high",
+    "note": "Interaction risk: gastrointestinal mucosal injury and severe bleeding"
+  }
+]

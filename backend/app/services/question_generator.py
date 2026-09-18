@@ -172,12 +172,15 @@ class QuestionGenerator:
         context: list[dict[str, Any]],
         language: str = "hi",
         socrates_axis: str | None = None,
+        extracted_context: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         Generates the next clinical question via Gemini or clinical fallback.
+        Incorporates Smart Recall known facts from patient documents.
         """
         client = self._get_client()
         context_json = json.dumps(context[-4:], ensure_ascii=False) if context else "[]"
+        known_facts_json = json.dumps(extracted_context, ensure_ascii=False, indent=2) if extracted_context else "None"
 
         if client:
             try:
@@ -187,6 +190,13 @@ class QuestionGenerator:
                     f"Patient language: {language}\n"
                     f"Chief complaint: {chief_complaint}\n"
                     f"Answers so far: {context_json}\n\n"
+                    f"ALREADY KNOWN FACTS (from patient's medical documents):\n"
+                    f"{known_facts_json}\n\n"
+                    f"Rules:\n"
+                    f"- Do NOT re-ask questions whose answers are already available above.\n"
+                    f"- If a fact has confidence > 0.8: confirm briefly (\"Your records show you take Metformin 500mg — is that still current?\")\n"
+                    f"- If confidence 0.5-0.8: rephrase as a verification question\n"
+                    f"- If confidence < 0.5: ask the question normally as if you don't know\n\n"
                     f'Generate the next question for the "{current_section}" section.\n'
                     f"Follow the SOCRATES framework for pain-related complaints.\n"
                     f"Ask ONE question at a time. Be conversational, culturally empathetic, not clinical.\n\n"
@@ -212,6 +222,7 @@ class QuestionGenerator:
                         return parsed
             except Exception as e:
                 logger.warning(f"Gemini question generation failed: {e}; using fallback question template.")
+
 
         # Fallback question generation
         return self._fallback_question(current_section, chief_complaint, language, socrates_axis)
