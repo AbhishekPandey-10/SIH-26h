@@ -33,6 +33,7 @@ from app.services.ayush_service import (
     generate_ayush_clinical_lens,
 )
 from app.services.folk_idioms import folk_idiom_normalizer
+from app.services.gemini_retry import gemini_call_with_retry
 from app.services.polypharmacy_detector import polypharmacy_detector
 from app.shared.schemas import SummaryField, SummarySource
 
@@ -473,10 +474,9 @@ class SummaryGenerator:
             "]"
         )
 
-        response = client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-        )
+        response = gemini_call_with_retry(client, self.model_name, prompt)
+        if response is None:
+            return []
         raw_text = response.text.strip()
         match = re.search(r"\[.*\]", raw_text, re.DOTALL)
         if match:

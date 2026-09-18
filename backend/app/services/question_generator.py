@@ -15,6 +15,7 @@ import re
 from typing import Any, Literal
 
 from app.config import settings
+from app.services.gemini_retry import gemini_call_with_retry
 
 logger = logging.getLogger("medikiosk.question_gen")
 
@@ -121,10 +122,9 @@ class QuestionGenerator:
                     f'Chief complaint: "{chief_complaint}"\n\n'
                     f'Respond ONLY with valid JSON: {{"category": "pain" | "general" | "psych" | "obgyn"}}'
                 )
-                response = client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt,
-                )
+                response = gemini_call_with_retry(client, self.model_name, prompt)
+                if response is None:
+                    raise RuntimeError("Gemini retries exhausted")
                 raw_text = response.text.strip()
                 # Parse JSON
                 match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
@@ -141,7 +141,9 @@ class QuestionGenerator:
         # 1. Psychiatric
         psych_keywords = [
             "sad", "depress", "suicid", "hopeless", "cry", "anxiety", "panic",
-            "mental", "stress", "sleep", "marne", "udas", "depression", "tension", "dimag"
+            "mental", "stress", "sleep", "marne", "udas", "depression", "tension", "dimag",
+            "उदास", "मरने", "आत्महत्या", "रोना", "घबराहट", "चिंता", "तनाव", "डिप्रेशन",
+            "नींद नहीं", "जीने की इच्छा", "बेचैनी", "मानसिक"
         ]
         if any(kw in text_lower for kw in psych_keywords):
             return "psych"
@@ -149,16 +151,21 @@ class QuestionGenerator:
         # 2. ObGyn
         obgyn_keywords = [
             "period", "pregnant", "pregnancy", "menstru", "bleed", "bleeding",
-            "vagina", "discharge", "lmp", "delivery", "garbh", "mahawari", "mahavari"
+            "vagina", "discharge", "lmp", "delivery", "garbh", "mahawari", "mahavari",
+            "माहवारी", "महावारी", "पीरियड्स", "पीरियड", "गर्भवती", "गर्भ", "प्रेगनेंसी",
+            "डिलीवरी", "सफेद पानी", "मासिक धर्म"
         ]
         if any(kw in text_lower for kw in obgyn_keywords):
             return "obgyn"
 
         # 3. Pain
         pain_keywords = [
-            "pain", "ache", "hurt", "tender", "burning", "cramp", "sore",
+            "pain", "ache", "hurt", "tender", "burning", "cramp", "sore", "pressure",
+            "radiat", "colic", "stabbing", "droop", "slur", "numb", "dizzy",
             "dard", "chhati me dard", "peeth", "sar dard", "pet dard", "dukhta",
-            "दर्द", "सीने में", "दुखता", "पीड़ा", "कष्ट"
+            "दर्द", "सीने में", "छाती", "दबाव", "जलन", "पीड़ा", "कष्ट", "दुखता", "सुन्न",
+            "टेढ़ा", "कमर", "सिर", "पेट में दर्द", "पसलियों", "धड़कन", "भारीपन", "खिंचाव",
+            "चुभन", "कंधे", "घुटनों", "दांत", "पैर में", "कान में दर्द"
         ]
         if any(kw in text_lower for kw in pain_keywords):
             return "pain"
@@ -211,10 +218,9 @@ class QuestionGenerator:
                     f'  "metadata": {{ "socrates_axis": "{socrates_axis or "detail"}", "category": "{current_section}" }}\n'
                     f"}}"
                 )
-                response = client.models.generate_content(
-                    model=self.model_name,
-                    contents=system_prompt,
-                )
+                response = gemini_call_with_retry(client, self.model_name, system_prompt)
+                if response is None:
+                    raise RuntimeError("Gemini retries exhausted")
                 raw_text = response.text.strip()
                 match = re.search(r"\{.*\}", raw_text, re.DOTALL)
                 if match:
@@ -249,10 +255,9 @@ class QuestionGenerator:
                     f'{{ "is_emergency": bool, "matched_rule": str, "confidence": float }}\n'
                     f"Only return true for is_emergency if you are >80% confident this is a genuine medical emergency."
                 )
-                response = client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt,
-                )
+                response = gemini_call_with_retry(client, self.model_name, prompt)
+                if response is None:
+                    raise RuntimeError("Gemini retries exhausted")
                 raw_text = response.text.strip()
                 match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
                 if match:

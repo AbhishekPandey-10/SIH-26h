@@ -800,6 +800,12 @@ class InterviewEngine:
             self.sessions[session_id]["extracted_context"] = extracted_context
         return self.sessions[session_id]
 
+    def cleanup_session(self, session_id: str) -> None:
+        """Removes session state from in-memory store to prevent memory leaks."""
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+            logger.info(f"Session {session_id}: Cleaned up in-memory interview state.")
+
     def set_body_map(self, session_id: str, selections: list[str]) -> None:
         """Sets body map anatomical selections and injects into LangGraph state."""
         state = self.get_or_create_session(session_id)

@@ -549,6 +549,148 @@ async def acknowledge_red_flag_endpoint(
     logger.info(f"Red flag {event_id} acknowledged by {req.acknowledged_by}; doctor dispatched for {event_row.session_id}")
     return {"success": True, "event_id": event_id, "status": "acknowledged"}
 
+# ==============================================================================
+# REST Interview Endpoints (HTTP counterpart to /ws/interview)
+# ==============================================================================
+
+class InterviewStartRequest(BaseModel):
+    session_id: str = Field(..., description="Session ID")
+    language: str = Field("hi", description="Language code")
+    body_map_selections: list[str] | None = Field(None, description="Body map selected regions")
+    interview_mode: str = Field("allopathic", description="allopathic or ayush")
+    is_caregiver: bool = Field(False, description="Whether caregiver is answering")
+    caregiver_name: str | None = Field(None, description="Caregiver name")
+    caregiver_relationship: str | None = Field(None, description="Caregiver relationship")
+
+
+class InterviewStepRequest(BaseModel):
+    session_id: str = Field(..., description="Session ID")
+    answer_text: str = Field("", description="Patient/caregiver response text")
+    verbatim_voice: str | None = Field(None, description="Verbatim raw voice transcript")
+    language: str = Field("hi", description="Language code")
+    is_proxy: bool = Field(False, description="Whether proxy/caregiver answered")
+    proxy_name: str | None = Field(None, description="Proxy name")
+    proxy_relationship: str | None = Field(None, description="Proxy relationship")
+
+
+@router.post("/api/interview/start", response_model=NextQuestion, tags=["Interview"])
+async def start_interview_endpoint(
+    req: InterviewStartRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/interview/start
+    REST endpoint to initialize clinical interview for a session.
+    """
+    sess_is_caregiver = req.is_caregiver
+    sess_caregiver_name = req.caregiver_name
+    sess_caregiver_rel = req.caregiver_relationship
+    sess_body_map = req.body_map_selections or []
+    sess_interview_mode = req.interview_mode or "allopathic"
+    active_language = req.language or "hi"
+
+    try:
+        stmt = select(Session).where(Session.id == req.session_id)
+        res = await db.execute(stmt)
+        s_row = res.scalar_one_or_none()
+        if s_row:
+            if s_row.is_caregiver:
+                sess_is_caregiver = True
+            if s_row.caregiver_name:
+                sess_caregiver_name = s_row.caregiver_name
+            if s_row.caregiver_relationship:
+                sess_caregiver_rel = s_row.caregiver_relationship
+            if s_row.body_map_selections:
+                sess_body_map = s_row.body_map_selections
+            if s_row.interview_mode:
+                sess_interview_mode = s_row.interview_mode
+            if s_row.language:
+                active_language = s_row.language
+    except Exception as err:
+        logger.warning(f"Error loading session in start_interview_endpoint: {err}")
+
+    first_q = interview_engine.start_interview(
+        session_id=req.session_id,
+        language=active_language,
+        body_map_selections=sess_body_map,
+        interview_mode=sess_interview_mode,
+        is_caregiver=sess_is_caregiver,
+        caregiver_name=sess_caregiver_name,
+        caregiver_relationship=sess_caregiver_rel,
+    )
+    return first_q
+
+
+@router.post("/api/interview/step", response_model=NextQuestion, tags=["Interview"])
+async def step_interview_endpoint(
+    req: InterviewStepRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/interview/step
+    REST endpoint to submit an answer and advance the interview state machine.
+    """
+    current_state = interview_engine.get_or_create_session(req.session_id)
+    prior_question = current_state.get("next_question")
+
+    # Check for safety red flags
+    red_flag = red_flag_detector.scan_and_confirm(req.answer_text, req.session_id)
+    if red_flag:
+        current_state["is_paused"] = True
+        current_state["paused_reason"] = "red_flag"
+        calm_msg = (
+            "हम यह सुनिश्चित कर रहे हैं कि आपको तुरंत उचित देखभाल मिले। अस्पताल स्टाफ को सूचित कर दिया गया है। कृपया आराम से बैठें।"
+            if req.language == "hi"
+            else "We're making sure you get the right care quickly. A staff member has been notified. Please stay comfortable."
+        )
+        return NextQuestion(
+            question_id=f"q_paused_{red_flag.event_id}",
+            text=calm_msg,
+            input_type="voice_touch",
+            section="emergency_hold",
+            progress_pct=current_state.get("progress_pct", 50.0),
+            is_red_flag_warning=True,
+            red_flag_details={
+                "event_id": red_flag.event_id,
+                "severity": red_flag.severity,
+                "category": red_flag.category,
+                "trigger_phrase": red_flag.trigger_phrase,
+                "matched_rule": red_flag.matched_rule,
+            },
+        )
+
+    next_q = interview_engine.step(
+        session_id=req.session_id,
+        answer_text=req.answer_text,
+        language=req.language,
+        verbatim_voice=req.verbatim_voice,
+    )
+
+    # Persist Q&A turn to database
+    try:
+        turn_num = len(current_state.get("answers", []))
+        transcript_entry = InterviewTranscript(
+            session_id=req.session_id,
+            turn_number=turn_num,
+            question_id=prior_question.question_id if prior_question else "unknown",
+            question_text=prior_question.text if prior_question else "",
+            answer_text=req.answer_text,
+            verbatim_voice=req.verbatim_voice,
+            language=req.language,
+            node_name=current_state.get("current_node", ""),
+            speaker="caregiver" if req.is_proxy else "patient",
+            text=req.answer_text,
+            is_proxy=req.is_proxy,
+            proxy_name=req.proxy_name,
+            proxy_relationship=req.proxy_relationship,
+        )
+        db.add(transcript_entry)
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Error persisting transcript in step endpoint: {e}")
+
+    return next_q
+
 
 # ==============================================================================
 # Ask-Back Endpoint
@@ -736,4 +878,16 @@ async def get_session_transcripts_endpoint(
         }
         for e in entries
     ]
+
+
+@router.get("/api/interview/{session_id}/transcript", tags=["Interview Transcript"])
+async def get_session_transcript_alias_endpoint(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /api/interview/{session_id}/transcript
+    Alias for /api/interview/transcripts/{session_id}
+    """
+    return await get_session_transcripts_endpoint(session_id=session_id, db=db)
 

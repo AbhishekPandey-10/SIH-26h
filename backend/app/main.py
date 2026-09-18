@@ -171,3 +171,18 @@ async def test_bhashini(req: BhashiniTestRequest):
         "tts_fallback_active": audio_url is None,
         "transcription_result": transcribed,
     }
+
+
+# ==============================================================================
+# Optional Unified Hosting: Serve pre-built React frontend if dist exists
+# ==============================================================================
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+_frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if not _frontend_dist.exists():
+    _frontend_dist = Path("/app/frontend/dist")
+
+if _frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="static_frontend")
+    logger.info(f"Mounted static frontend distribution from {_frontend_dist}")

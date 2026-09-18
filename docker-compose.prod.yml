@@ -1,28 +1,28 @@
 services:
   # ============================================================================
-  # MediKiosk Backend (FastAPI + LangGraph + Uvicorn with hot-reload)
+  # MediKiosk Backend (FastAPI + LangGraph Production)
   # ============================================================================
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: medikiosk-backend
-    restart: unless-stopped
+    container_name: medikiosk-backend-prod
+    restart: always
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/app:/app/app
       - ./backend/data:/app/data
       - ./backend/uploads:/app/uploads
     env_file:
       - path: .env
         required: false
     environment:
-      - ENVIRONMENT=development
-      - DEBUG=true
+      - ENVIRONMENT=production
+      - DEBUG=false
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/medikiosk
       - DATABASE_URL_SYNC=postgresql+psycopg2://postgres:postgres@postgres:5432/medikiosk
-      - USE_SQLITE_FALLBACK=false
+      - USE_SQLITE_FALLBACK=true
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,8 +32,8 @@ services:
   # ============================================================================
   postgres:
     image: postgres:16-alpine
-    container_name: medikiosk-postgres
-    restart: unless-stopped
+    container_name: medikiosk-postgres-prod
+    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -41,7 +41,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_prod_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d medikiosk"]
       interval: 5s
@@ -49,26 +49,21 @@ services:
       retries: 5
 
   # ============================================================================
-  # MediKiosk Frontend (React + Vite PWA with hot-reload)
+  # MediKiosk Frontend (Nginx Production Reverse Proxy & Static Hosting)
   # ============================================================================
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: development
-    container_name: medikiosk-frontend
-    restart: unless-stopped
+      target: production
+    container_name: medikiosk-frontend-prod
+    restart: always
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-    environment:
-      - VITE_API_BASE_URL=http://localhost:8000
-      - VITE_WS_BASE_URL=ws://localhost:8000
+      - "80:80"
+      - "5173:80"
     depends_on:
       - backend
 
 volumes:
-  postgres_data:
+  postgres_prod_data:
     driver: local

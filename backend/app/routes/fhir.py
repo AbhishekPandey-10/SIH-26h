@@ -109,3 +109,47 @@ async def get_fhir_preview_endpoint(
         patient_abha_id=patient_abha_id,
     )
     return bundle
+
+
+@router.post("/retry-queue")
+async def process_retry_queue(db: AsyncSession = Depends(get_db)):
+    """
+    POST /api/fhir/retry-queue
+    Drains the fhir_push_queue table: re-attempts push for all failed entries.
+    Called on network reconnect or manually by staff.
+    """
+    from app.db.models import FHIRPushQueue
+
+    stmt = select(FHIRPushQueue).where(FHIRPushQueue.status == "failed")
+    res = await db.execute(stmt)
+    pending = list(res.scalars().all())
+
+    if not pending:
+        return {"processed": 0, "message": "No pending items in retry queue."}
+
+    results = []
+    for entry in pending:
+        try:
+            push_result = await abdm_push_service.push_bundle(
+                session_id=entry.session_id,
+                bundle=entry.bundle_json,
+                db=db,
+            )
+            if push_result.get("success"):
+                entry.status = "pushed"
+                results.append({"queue_id": entry.id, "status": "pushed"})
+            else:
+                entry.retry_count += 1
+                entry.last_error = push_result.get("error", "Unknown")
+                results.append({"queue_id": entry.id, "status": "retry_failed", "retry_count": entry.retry_count})
+        except Exception as e:
+            entry.retry_count += 1
+            entry.last_error = str(e)
+            results.append({"queue_id": entry.id, "status": "error", "error": str(e)})
+
+    await db.commit()
+    return {
+        "processed": len(results),
+        "results": results,
+    }
+

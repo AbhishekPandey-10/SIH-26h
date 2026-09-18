@@ -382,6 +382,10 @@ async def end_session(req: SessionEndRequest, db: AsyncSession = Depends(get_db)
     if req.session_id in _IN_MEMORY_SESSION_CACHE:
         del _IN_MEMORY_SESSION_CACHE[req.session_id]
 
+    # 3. Purge interview engine in-memory session state (prevents memory leaks)
+    from app.services.interview_engine import interview_engine
+    interview_engine.cleanup_session(req.session_id)
+
     logger.info(f"Session {req.session_id} ended. Transient memory wiped.")
 
     return {
@@ -389,6 +393,7 @@ async def end_session(req: SessionEndRequest, db: AsyncSession = Depends(get_db)
         "session_id": req.session_id,
         "message": "Session completed and transient data wiped."
     }
+
 
 
 @router.get("/{session_id}/status")

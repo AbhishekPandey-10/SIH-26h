@@ -24,7 +24,7 @@ SANDBOX_PATIENTS: Dict[str, PatientDemographics] = {
         abha_number="91-1024-5829-1482",
         name="Rajesh Kumar",
         gender="M",
-        dob="1973-05-14",
+        dob="1968-05-14",
         mobile="9876543210",
         address="House 42, Pocket B, Mayur Vihar Phase II",
         district="East Delhi",
@@ -74,19 +74,47 @@ MOCK_FHIR_BUNDLES: Dict[str, List[Dict[str, Any]]] = {
     "rajesh.kumar@abdm": [
         {
             "resourceType": "Bundle",
-            "id": "bundle-rx-001",
+            "id": "bundle-rx-visit1",
             "type": "document",
-            "timestamp": "2025-03-15T09:30:00Z",
+            "timestamp": "2026-06-15T09:30:00Z",
+            "meta": {"label": "Visit 1 — 3 months ago: Prescription"},
             "entry": [
                 {
                     "resource": {
                         "resourceType": "MedicationRequest",
-                        "id": "medrx-01",
+                        "id": "medrx-metformin-500",
                         "status": "active",
                         "intent": "order",
                         "medicationCodeableConcept": {
                             "text": "Tab. Glycomet GP 1 (Metformin 500mg + Glimepiride 1mg)"
                         },
+                        "dosageInstruction": [{"text": "1 tab twice daily before meals"}],
+                        "subject": {"reference": "Patient/rajesh.kumar@abdm"}
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "MedicationRequest",
+                        "id": "medrx-ecosprin-75",
+                        "status": "active",
+                        "intent": "order",
+                        "medicationCodeableConcept": {
+                            "text": "Tab. Ecosprin 75 (Aspirin 75mg)"
+                        },
+                        "dosageInstruction": [{"text": "1 tab once daily after lunch"}],
+                        "subject": {"reference": "Patient/rajesh.kumar@abdm"}
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "MedicationRequest",
+                        "id": "medrx-telmisartan-40",
+                        "status": "active",
+                        "intent": "order",
+                        "medicationCodeableConcept": {
+                            "text": "Tab. Telma 40 (Telmisartan 40mg)"
+                        },
+                        "dosageInstruction": [{"text": "1 tab once daily morning"}],
                         "subject": {"reference": "Patient/rajesh.kumar@abdm"}
                     }
                 }
@@ -94,18 +122,53 @@ MOCK_FHIR_BUNDLES: Dict[str, List[Dict[str, Any]]] = {
         },
         {
             "resourceType": "Bundle",
-            "id": "bundle-lab-cbc-001",
+            "id": "bundle-lab-visit2",
             "type": "document",
-            "timestamp": "2025-03-14T11:00:00Z",
+            "timestamp": "2026-08-15T11:00:00Z",
+            "meta": {"label": "Visit 2 — 1 month ago: Lab Report"},
             "entry": [
                 {
                     "resource": {
                         "resourceType": "Observation",
-                        "id": "obs-hb-01",
+                        "id": "obs-hba1c",
+                        "status": "final",
+                        "code": {"text": "HbA1c"},
+                        "valueQuantity": {"value": 6.8, "unit": "%"},
+                        "referenceRange": [{"text": "< 5.7% Normal, 5.7-6.4% Pre-diabetes, >= 6.5% Diabetes"}],
+                        "interpretation": [{"text": "Slightly elevated (pre-diabetic range)"}]
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "Observation",
+                        "id": "obs-sgpt",
+                        "status": "final",
+                        "code": {"text": "SGPT (ALT)"},
+                        "valueQuantity": {"value": 28, "unit": "U/L"},
+                        "referenceRange": [{"text": "7-56 U/L"}],
+                        "interpretation": [{"text": "Normal"}]
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "Observation",
+                        "id": "obs-sgot",
+                        "status": "final",
+                        "code": {"text": "SGOT (AST)"},
+                        "valueQuantity": {"value": 32, "unit": "U/L"},
+                        "referenceRange": [{"text": "10-40 U/L"}],
+                        "interpretation": [{"text": "Normal"}]
+                    }
+                },
+                {
+                    "resource": {
+                        "resourceType": "Observation",
+                        "id": "obs-hemoglobin",
                         "status": "final",
                         "code": {"text": "Hemoglobin"},
-                        "valueQuantity": {"value": 9.8, "unit": "g/dL"},
-                        "interpretation": [{"text": "Low"}]
+                        "valueQuantity": {"value": 9.2, "unit": "g/dL"},
+                        "referenceRange": [{"text": "13.0-17.0 g/dL (Male)"}],
+                        "interpretation": [{"text": "Low — Mild anemia"}]
                     }
                 }
             ]

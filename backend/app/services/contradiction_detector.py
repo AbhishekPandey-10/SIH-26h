@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import ExtractedEntityModel, InterviewTranscript
+from app.services.gemini_retry import gemini_call_with_retry
 from app.shared.schemas import ContradictionItem
 
 logger = logging.getLogger("medikiosk.contradiction_detector")
@@ -224,10 +225,9 @@ class ContradictionDetector:
             "]"
         )
 
-        response = client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-        )
+        response = gemini_call_with_retry(client, self.model_name, prompt)
+        if response is None:
+            return []
         raw_text = response.text.strip()
         match = re.search(r"\[.*\]", raw_text, re.DOTALL)
         if match:

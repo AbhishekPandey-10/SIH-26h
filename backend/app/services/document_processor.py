@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import Document, ExtractedEntityModel
+from app.services.gemini_retry import gemini_call_with_retry
 from app.services.lab_flagging import lab_flagger
 
 logger = logging.getLogger("medikiosk.doc_processor")
@@ -185,6 +186,9 @@ class DocumentProcessor:
                     is_abnormal=is_abnormal,
                     created_at=datetime.now(UTC),
                 )
+                # Flag low-confidence entities as needing confirmation
+                if entity_model.confidence < 0.5:
+                    entity_model.entity_type = f"{entity_model.entity_type}:needs_confirmation"
                 db.add(entity_model)
                 saved_entities.append(entity_model)
 
@@ -211,13 +215,12 @@ class DocumentProcessor:
             with Image.open(image_path):
                 pass  # Verifies image is valid
 
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=[
-                    PROMPT_GEMINI_OCR,
-                    image_path.read_bytes(),
-                ],
+            response = gemini_call_with_retry(
+                client, self.model_name,
+                [PROMPT_GEMINI_OCR, image_path.read_bytes()],
             )
+            if response is None:
+                return []
 
             text = response.text.strip()
             # Clean markdown json fences if present

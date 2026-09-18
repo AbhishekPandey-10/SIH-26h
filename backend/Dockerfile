@@ -30,6 +30,7 @@ RUN uv pip install --system -e .
 COPY app/ ./app/
 COPY data/ ./data/
 COPY migrations/ ./migrations/
+COPY scripts/ ./scripts/
 COPY alembic.ini .
 
 EXPOSE 8000
