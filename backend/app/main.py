@@ -14,7 +14,8 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db.database import init_db
-from app.routes.documents import router as documents_router, ws_router as scan_ws_router
+from app.routes.documents import router as documents_router
+from app.routes.documents import ws_router as scan_ws_router
 from app.routes.fhir import router as fhir_router
 from app.routes.interview import router as interview_router
 from app.routes.session import router as session_router

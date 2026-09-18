@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 logger = logging.getLogger("medikiosk.lab_flagging")
 
@@ -36,7 +36,7 @@ class LabFlaggingEngine:
             logger.error(f"Failed to load lab reference ranges: {e}")
             self.ranges = {}
 
-    def _match_test_key(self, test_name: str) -> Optional[str]:
+    def _match_test_key(self, test_name: str) -> str | None:
         """Find the canonical key in lab_ranges for a given test name or alias."""
         clean = test_name.strip().lower()
         clean_sub = re.sub(r"[\(\)\[\]\-_\/:]", " ", clean)
@@ -68,7 +68,7 @@ class LabFlaggingEngine:
 
         return None
 
-    def _extract_numeric_value(self, value_str: str) -> Tuple[Optional[float], Optional[str]]:
+    def _extract_numeric_value(self, value_str: str) -> Tuple[float | None, str | None]:
         """
         Extract numerical reading and any embedded unit from a value string.
         Examples:
@@ -93,7 +93,7 @@ class LabFlaggingEngine:
         except ValueError:
             return None, None
 
-    def _normalize_unit(self, unit: Optional[str]) -> str:
+    def _normalize_unit(self, unit: str | None) -> str:
         if not unit:
             return ""
         clean = unit.strip().lower()
@@ -105,9 +105,9 @@ class LabFlaggingEngine:
         self,
         test_name: str,
         value_text: str,
-        unit: Optional[str] = None,
+        unit: str | None = None,
         gender: str = "male",
-    ) -> Tuple[Optional[bool], Optional[str]]:
+    ) -> Tuple[bool | None, str | None]:
         """
         Evaluate if a lab entity is abnormal.
 

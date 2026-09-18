@@ -5,14 +5,13 @@ PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
 import io
 from pathlib import Path
-from PIL import Image
-import pytest
+
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.services.crop_service import crop_service
-from app.services.lab_flagging import lab_flagger
 from app.services.document_processor import normalize_indian_date
-
+from app.services.lab_flagging import lab_flagger
 
 # ------------------------------------------------------------------------------
 # 1. Lab Abnormal Value Flagging Tests

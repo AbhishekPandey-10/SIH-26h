@@ -4,7 +4,7 @@ PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -26,7 +26,7 @@ class SummaryGenerateRequest(BaseModel):
 
 class UpdateSummaryFieldRequest(BaseModel):
     content: str = Field(..., description="Updated field text verified/edited by doctor")
-    doctor_notes: Optional[str] = Field(None, description="Optional physician annotation")
+    doctor_notes: str | None = Field(None, description="Optional physician annotation")
 
 
 @router.post("/generate", response_model=List[SummaryField])
@@ -96,7 +96,7 @@ async def update_summary_field_endpoint(
 
     if not summary or not summary.fields_json:
         # Generate summary first if missing
-        fields = await summary_generator.generate_summary(session_id=session_id, db=db)
+        await summary_generator.generate_summary(session_id=session_id, db=db)
         res = await db.execute(stmt)
         summary = res.scalar_one_or_none()
         if not summary or not summary.fields_json:

@@ -14,7 +14,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from PIL import Image
 from sqlalchemy import select
@@ -44,7 +44,7 @@ Example: "Glycomet 500mg" -> value: "Glycomet 500mg", generic_name: "Metformin"
 Output as JSON array ONLY. Do not enclose in markdown ticks if possible, or return a clean JSON array."""
 
 
-def normalize_indian_date(raw_date: Optional[str]) -> Optional[str]:
+def normalize_indian_date(raw_date: str | None) -> str | None:
     """
     Parse and normalize Indian dates (preferring DD/MM/YYYY) to YYYY-MM-DD.
     """
@@ -208,7 +208,7 @@ class DocumentProcessor:
     async def _call_gemini_vision(self, client: Any, image_path: Path) -> List[Dict[str, Any]]:
         """Invokes Gemini Multimodal Vision to extract medical entities."""
         try:
-            with Image.open(image_path) as img:
+            with Image.open(image_path):
                 pass  # Verifies image is valid
 
             response = client.models.generate_content(
@@ -238,7 +238,7 @@ class DocumentProcessor:
             logger.warning(f"Gemini Vision call encountered an error: {e}")
         return []
 
-    def _fallback_extract_entities(self, image_path: Path, file_type: Optional[str]) -> List[Dict[str, Any]]:
+    def _fallback_extract_entities(self, image_path: Path, file_type: str | None) -> List[Dict[str, Any]]:
         """
         Robust offline fallback for sample datasets, demos, and testing.
         Matches against sample doc annotations or provides clinical defaults.

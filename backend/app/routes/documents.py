@@ -5,12 +5,11 @@ PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
 import json
 import logging
-import os
 import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 from fastapi import (
     APIRouter,
@@ -70,8 +69,8 @@ class ScanStatusManager:
         session_id: str,
         document_id: str,
         status: str,
-        progress: Optional[float] = None,
-        message: Optional[str] = None,
+        progress: float | None = None,
+        message: str | None = None,
     ):
         """Sends status update event to all subscribers for session_id."""
         payload = {
@@ -133,7 +132,7 @@ class DocumentUploadResponse(BaseModel):
 async def upload_document_endpoint(
     session_id: str = Form(..., description="Active kiosk session identifier"),
     page_number: int = Form(1, description="Page number of the document"),
-    file_type: Optional[str] = Form("prescription", description="prescription, lab, discharge, etc."),
+    file_type: str | None = Form("prescription", description="prescription, lab, discharge, etc."),
     file: UploadFile = File(..., description="Captured image file"),
     db: AsyncSession = Depends(get_db),
 ):
