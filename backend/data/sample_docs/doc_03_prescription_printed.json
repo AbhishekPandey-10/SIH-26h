@@ -1,0 +1,71 @@
+{
+  "document_id": "doc_03_prescription_printed",
+  "document_type": "prescription",
+  "title": "Apollo Hospitals — Cardiology Outpatient Prescription",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Coronary Artery Disease (Post PTCA Stent to LAD)",
+      "date": "2025-02-28",
+      "bbox": [
+        0.1,
+        0.2,
+        0.65,
+        0.04
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Ecosprin AV 75/20",
+      "generic": "Aspirin + Atorvastatin",
+      "date": "2025-02-28",
+      "bbox": [
+        0.08,
+        0.32,
+        0.65,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Brilinta 90mg",
+      "generic": "Ticagrelor",
+      "date": "2025-02-28",
+      "bbox": [
+        0.08,
+        0.39,
+        0.55,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Metolar XR 25",
+      "generic": "Metoprolol Succinate",
+      "date": "2025-02-28",
+      "bbox": [
+        0.08,
+        0.46,
+        0.58,
+        0.05
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Ramistar 2.5",
+      "generic": "Ramipril",
+      "date": "2025-02-28",
+      "bbox": [
+        0.08,
+        0.53,
+        0.52,
+        0.05
+      ],
+      "confidence": 0.98
+    }
+  ]
+}

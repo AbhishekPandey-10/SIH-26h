@@ -1,0 +1,71 @@
+{
+  "document_id": "doc_11_lab_kft",
+  "document_type": "lab_report",
+  "title": "Max Labs — Kidney Function Test (KFT) & Electrolytes",
+  "entities": [
+    {
+      "type": "lab_value",
+      "value": "48.0",
+      "generic": "Blood Urea",
+      "unit": "mg/dL",
+      "reference_range": "15.0 - 40.0",
+      "is_abnormal": true,
+      "date": "2025-02-27",
+      "bbox": [
+        0.1,
+        0.28,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "1.65",
+      "generic": "Serum Creatinine",
+      "unit": "mg/dL",
+      "reference_range": "0.70 - 1.20",
+      "is_abnormal": true,
+      "date": "2025-02-27",
+      "bbox": [
+        0.1,
+        0.32,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "48",
+      "generic": "eGFR",
+      "unit": "mL/min/1.73m2",
+      "reference_range": ">= 60",
+      "is_abnormal": true,
+      "date": "2025-02-27",
+      "bbox": [
+        0.1,
+        0.36,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "lab_value",
+      "value": "4.7",
+      "generic": "Potassium",
+      "unit": "mEq/L",
+      "reference_range": "3.5 - 5.1",
+      "is_abnormal": false,
+      "date": "2025-02-27",
+      "bbox": [
+        0.1,
+        0.48,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.98
+    }
+  ]
+}

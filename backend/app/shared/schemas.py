@@ -135,40 +135,41 @@ class RedFlagEvent(BaseModel):
 
 
 # ==============================================================================
-# DEV 2 STUB SCHEMAS (Documents, Data & Infrastructure Track)
-# TODO: Dev 2 will finalize the concrete schema definitions for Module B and ABDM
+# DEV 2 SCHEMAS (Documents, Data & Infrastructure Track)
 # ==============================================================================
 
 class ExtractedEntity(BaseModel):
     """
-    [DEV 2 STUB] Output of the multimodal OCR & entity extraction pipeline.
-    Finalized by Dev 2 in Phase 2.
+    Output of the multimodal OCR & entity extraction pipeline (Module B).
     """
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(from_attributes=True, extra="allow")
 
-    entity_id: str = Field(..., description="Unique entity ID")
-    type: str = Field(..., description="e.g., 'diagnosis', 'medication', 'lab_value', 'allergy'")
-    value: str = Field(..., description="Extracted clinical entity text")
-    date: str | None = Field(None, description="Document date or mention date if available")
+    entity_id: str = Field(..., description="Unique entity ID, e.g. 'ent_med_01'")
+    type: Literal["diagnosis", "medication", "lab_value", "allergy", "procedure", "vital"] = Field(
+        ...,
+        description="Standardized clinical entity category"
+    )
+    value: str = Field(..., description="Extracted clinical entity text, e.g. 'Tab Glycomet 500mg'")
+    generic_name: str | None = Field(None, description="Normalized generic drug name, e.g. 'Metformin'")
+    date: str | None = Field(None, description="Document date or mention date if available (YYYY-MM-DD)")
     source_document_id: str | None = Field(None, description="Foreign key to documents table")
     bounding_box: list[float] | None = Field(
         None,
         description="Normalized coordinates [x, y, w, h] (0.0 to 1.0) on original document image"
     )
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence score")
-    unit: str | None = Field(None, description="Lab unit if applicable")
-    reference_range: str | None = Field(None, description="Normal reference range if lab")
-    is_abnormal: bool | None = Field(None, description="Flagged by lab range validator")
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence score (0.0 to 1.0)")
+    unit: str | None = Field(None, description="Lab unit if applicable, e.g. 'mg/dL', 'g/dL'")
+    reference_range: str | None = Field(None, description="Normal reference range if lab, e.g. '70-100'")
+    is_abnormal: bool | None = Field(None, description="Flagged as abnormal by lab range validator")
 
 
 class FHIRBundlePayload(BaseModel):
     """
-    [DEV 2 STUB] ABDM standardized FHIR R4 Bundle payload.
-    Finalized by Dev 2 in Phase 2/3.
+    ABDM standardized FHIR R4 Bundle payload for health record export.
     """
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(from_attributes=True, extra="allow")
 
-    patient_abha_id: str = Field(..., description="ABHA address / ID of the patient")
+    patient_abha_id: str = Field(..., description="ABHA address / ID of the patient, e.g. 'rajesh.kumar@abdm'")
     encounter_id: str = Field(..., description="OPD encounter UUID")
     summary_fields: list[SummaryField] = Field(
         default_factory=list,
@@ -181,5 +182,51 @@ class FHIRBundlePayload(BaseModel):
     )
     raw_fhir_json: dict[str, Any] | None = Field(
         None,
-        description="Full FHIR R4 Bundle JSON resource"
+        description="Full FHIR R4 Bundle JSON resource complying with ABDM profiles"
     )
+
+
+class PatientDemographics(BaseModel):
+    """
+    Patient demographic profile verified via ABHA or Aadhaar e-KYC.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    abha_id: str = Field(..., description="14-digit ABHA number or ABHA address, e.g. 'rajesh.kumar@abdm'")
+    abha_number: str | None = Field(None, description="14-digit numerical ABHA ID")
+    name: str = Field(..., description="Full legal name of patient")
+    gender: Literal["M", "F", "O"] = Field(..., description="Gender: M (Male), F (Female), O (Other)")
+    dob: str = Field(..., description="Date of birth in YYYY-MM-DD or year of birth YYYY")
+    mobile: str | None = Field(None, description="Linked 10-digit Indian mobile number")
+    address: str | None = Field(None, description="Full residential address")
+    district: str | None = Field(None, description="District name")
+    state: str | None = Field(None, description="State name")
+    photo_url: str | None = Field(None, description="Demographic photo URL or data URI")
+    is_verified: bool = Field(default=True, description="True if authenticated through ABDM sandbox")
+
+
+class ABHASession(BaseModel):
+    """
+    Active authenticated ABDM session returned upon OTP verification.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    session_id: str = Field(..., description="Internal kiosk session UUID")
+    abha_id: str = Field(..., description="Verified patient ABHA address")
+    auth_token: str = Field(..., description="ABDM gateway bearer access token")
+    patient: PatientDemographics = Field(..., description="Patient demographic details")
+    expires_at: datetime = Field(..., description="Session expiry timestamp")
+
+
+class OTPRequest(BaseModel):
+    identifier: str = Field(..., description="Aadhaar number, mobile, or ABHA address")
+    auth_mode: Literal["MOBILE_OTP", "AADHAAR_OTP", "DEMOGRAPHICS"] = Field(
+        default="MOBILE_OTP",
+        description="Selected ABDM authentication method"
+    )
+
+
+class OTPVerify(BaseModel):
+    txn_id: str = Field(..., description="Transaction ID returned by request-otp")
+    otp: str = Field(..., description="6-digit authentication OTP")
+    abha_id: str = Field(..., description="Patient ABHA ID")

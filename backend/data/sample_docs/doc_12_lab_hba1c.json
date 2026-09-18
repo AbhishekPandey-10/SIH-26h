@@ -1,0 +1,55 @@
+{
+  "document_id": "doc_12_lab_hba1c",
+  "document_type": "lab_report",
+  "title": "Thyrocare — Glycated Hemoglobin (HbA1c) & Blood Glucose",
+  "entities": [
+    {
+      "type": "lab_value",
+      "value": "9.2",
+      "generic": "HbA1c",
+      "unit": "%",
+      "reference_range": "< 5.7",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.28,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "184",
+      "generic": "Fasting Blood Sugar",
+      "unit": "mg/dL",
+      "reference_range": "70 - 100",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.4,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "262",
+      "generic": "Post Prandial Blood Sugar",
+      "unit": "mg/dL",
+      "reference_range": "< 140",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.44,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "document_id": "doc_07_prescription_handwritten",
+  "document_type": "prescription",
+  "title": "Orthopaedic Clinic Slip (Handwritten Format - Lumbar Spondylosis)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Lumbar Radiculopathy / Muscle Spasm",
+      "date": "2025-03-05",
+      "bbox": [
+        0.06,
+        0.16,
+        0.6,
+        0.05
+      ],
+      "confidence": 0.91
+    },
+    {
+      "type": "medication",
+      "value": "Tab Zerodol TH 4",
+      "generic": "Aceclofenac + Thiocolchicoside",
+      "date": "2025-03-05",
+      "bbox": [
+        0.06,
+        0.3,
+        0.65,
+        0.06
+      ],
+      "confidence": 0.93
+    },
+    {
+      "type": "medication",
+      "value": "Tab Rabekind 20",
+      "generic": "Rabeprazole",
+      "date": "2025-03-05",
+      "bbox": [
+        0.06,
+        0.38,
+        0.55,
+        0.06
+      ],
+      "confidence": 0.92
+    },
+    {
+      "type": "medication",
+      "value": "Tab Pregabalin + Methylcobalamin",
+      "generic": "Pregabalin + Methylcobalamin",
+      "date": "2025-03-05",
+      "bbox": [
+        0.06,
+        0.46,
+        0.68,
+        0.06
+      ],
+      "confidence": 0.91
+    }
+  ]
+}

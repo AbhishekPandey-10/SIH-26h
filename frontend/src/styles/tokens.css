@@ -1,0 +1,72 @@
+/* ==============================================================================
+   MediKiosk Design System Tokens
+   PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
+   ============================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+
+:root {
+  /* State colors */
+  --color-red-flag: #DC2626;
+  --color-amber-warning: #F59E0B;
+  --color-green-safe: #10B981;
+  --color-blue-info: #3B82F6;
+
+  /* Verification badge colors */
+  --color-patient-reported: #3B82F6;     /* blue */
+  --color-document-extracted: #10B981;   /* green */
+  --color-needs-confirmation: #F59E0B;   /* amber */
+  --color-conflicting: #DC2626;          /* red */
+
+  /* Surface colors (dark kiosk theme) */
+  --color-surface-primary: #0F172A;
+  --color-surface-secondary: #1E293B;
+  --color-surface-elevated: #334155;
+  --color-surface-hover: #475569;
+  --color-surface-glass: rgba(30, 41, 59, 0.75);
+
+  /* Text & Accents */
+  --color-text-primary: #F8FAFC;
+  --color-text-secondary: #94A3B8;
+  --color-text-muted: #64748B;
+  --color-accent-teal: #06B6D4;
+  --color-accent-purple: #8B5CF6;
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-focused: rgba(59, 130, 246, 0.6);
+
+  /* Kiosk-specific ergonomics */
+  --touch-target-min: 48px;
+  --border-radius-card: 16px;
+  --border-radius-pill: 9999px;
+  --border-radius-button: 12px;
+  --font-family: 'Inter', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Shadow & Depth */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+  --shadow-glow-blue: 0 0 20px rgba(59, 130, 246, 0.35);
+  --shadow-glow-red: 0 0 25px rgba(220, 38, 38, 0.4);
+
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-bounce: 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Base resets & typography */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none; /* Kiosk touch screen guard */
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--color-surface-primary);
+  color: var(--color-text-primary);
+  line-height: 1.5;
+  overflow-x: hidden;
+  touch-action: manipulation;
+}

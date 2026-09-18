@@ -1,0 +1,43 @@
+{
+  "document_id": "doc_17_radiology_usg",
+  "document_type": "radiology_report",
+  "title": "Focus Imaging — Ultrasound Whole Abdomen & Pelvis",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Grade II Fatty Liver (Hepatosteatosis)",
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.42,
+        0.65,
+        0.04
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "diagnosis",
+      "value": "Cholelithiasis (Gallbladder Stone)",
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.47,
+        0.6,
+        0.04
+      ],
+      "confidence": 0.97
+    },
+    {
+      "type": "procedure",
+      "value": "Ultrasonography Whole Abdomen",
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.14,
+        0.55,
+        0.03
+      ],
+      "confidence": 0.99
+    }
+  ]
+}

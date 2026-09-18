@@ -1,0 +1,24 @@
+================================================================================
+FORTIS ESCORTS HEART INSTITUTE — DISCHARGE SUMMARY
+Cardiology Unit II | IPD No: FE-2024-99821 | Room: 412
+Patient: Amit Sharma | Age: 58 Y / M | ABHA: amit.sharma@abdm
+Admission: 2024-11-12 | Discharge: 2024-11-16
+Consultant: Dr. Rajiv Malhotra, MD, DM (Cardiology)
+================================================================================
+FINAL DIAGNOSIS:
+  1. Acute Anterior Wall Myocardial Infarction (STEMI)
+  2. Coronary Angiography: Critical 95% Proximal LAD Stenosis
+  3. Status Post Primary PTCA + Drug Eluting Stent (DES) to LAD
+
+PROCEDURAL SUMMARY:
+  Primary PTCA done via right radial artery approach on 2024-11-12.
+  Deployed Resolute Onyx 3.5 x 28mm DES at 14 atm. TIMI III flow achieved.
+  Echocardiography: LVEF 45%, regional wall motion abnormality in LAD territory.
+
+DISCHARGE ADVICE:
+  1. Tab. Ticagrelor 90mg (1 tab BD - DO NOT STOP)
+  2. Tab. Aspirin 75mg (1 tab OD after lunch)
+  3. Tab. Atorvastatin 40mg (1 tab OD at night)
+  4. Tab. Metoprolol Succinate 25mg (1 tab OD morning)
+  5. Tab. Ramipril 2.5mg (1 tab OD bedtime)
+================================================================================

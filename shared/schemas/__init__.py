@@ -1,6 +1,6 @@
 """
 Shared Schemas Package Root
-Re-exports API contract models across backend and test suites.
+Canonical API contract models across backend, frontend types, and test suites.
 """
 
 from app.shared.schemas import (
@@ -11,6 +11,10 @@ from app.shared.schemas import (
     RedFlagEvent,
     ExtractedEntity,
     FHIRBundlePayload,
+    PatientDemographics,
+    ABHASession,
+    OTPRequest,
+    OTPVerify,
 )
 
 __all__ = [
@@ -21,4 +25,8 @@ __all__ = [
     "RedFlagEvent",
     "ExtractedEntity",
     "FHIRBundlePayload",
+    "PatientDemographics",
+    "ABHASession",
+    "OTPRequest",
+    "OTPVerify",
 ]

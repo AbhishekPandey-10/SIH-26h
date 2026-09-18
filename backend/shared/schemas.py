@@ -9,6 +9,10 @@ from app.shared.schemas import (
     RedFlagEvent,
     ExtractedEntity,
     FHIRBundlePayload,
+    PatientDemographics,
+    ABHASession,
+    OTPRequest,
+    OTPVerify,
 )
 
 __all__ = [
@@ -19,4 +23,8 @@ __all__ = [
     "RedFlagEvent",
     "ExtractedEntity",
     "FHIRBundlePayload",
+    "PatientDemographics",
+    "ABHASession",
+    "OTPRequest",
+    "OTPVerify",
 ]

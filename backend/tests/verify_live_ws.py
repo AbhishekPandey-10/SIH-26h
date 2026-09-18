@@ -5,6 +5,7 @@ Verification script for live WebSocket connection to /ws/interview
 import asyncio
 import json
 import sys
+
 import websockets
 
 if hasattr(sys.stdout, "reconfigure"):

@@ -1,0 +1,58 @@
+{
+  "document_id": "doc_06_prescription_handwritten",
+  "document_type": "prescription",
+  "title": "Community Health Centre Clinic Slip (Handwritten Format)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Acute Gastroenteritis / Loose stools",
+      "date": "2025-03-12",
+      "bbox": [
+        0.05,
+        0.15,
+        0.5,
+        0.06
+      ],
+      "confidence": 0.92
+    },
+    {
+      "type": "medication",
+      "value": "Tab Ciplox TZ",
+      "generic": "Ciprofloxacin + Tinidazole",
+      "date": "2025-03-12",
+      "bbox": [
+        0.05,
+        0.32,
+        0.6,
+        0.06
+      ],
+      "confidence": 0.94
+    },
+    {
+      "type": "medication",
+      "value": "Tab Ondem 4mg",
+      "generic": "Ondansetron",
+      "date": "2025-03-12",
+      "bbox": [
+        0.05,
+        0.4,
+        0.55,
+        0.06
+      ],
+      "confidence": 0.93
+    },
+    {
+      "type": "medication",
+      "value": "Electral sachet",
+      "generic": "Oral Rehydration Salts (ORS)",
+      "date": "2025-03-12",
+      "bbox": [
+        0.05,
+        0.48,
+        0.58,
+        0.06
+      ],
+      "confidence": 0.95
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "document_id": "doc_09_lab_cbc",
+  "document_type": "lab_report",
+  "title": "Dr. Lal PathLabs — Complete Blood Count (CBC) with ESR",
+  "entities": [
+    {
+      "type": "lab_value",
+      "value": "9.8",
+      "generic": "Hemoglobin",
+      "unit": "g/dL",
+      "reference_range": "13.0 - 17.0",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.28,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "12400",
+      "generic": "Total Leukocyte Count",
+      "unit": "/cumm",
+      "reference_range": "4000 - 10000",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.32,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "185000",
+      "generic": "Platelet Count",
+      "unit": "/cumm",
+      "reference_range": "150000 - 410000",
+      "is_abnormal": false,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.44,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "74.0",
+      "generic": "MCV",
+      "unit": "fL",
+      "reference_range": "80.0 - 100.0",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.52,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "lab_value",
+      "value": "42",
+      "generic": "ESR",
+      "unit": "mm/1st hr",
+      "reference_range": "0 - 15",
+      "is_abnormal": true,
+      "date": "2025-03-14",
+      "bbox": [
+        0.1,
+        0.56,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.98
+    }
+  ]
+}

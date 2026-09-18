@@ -1,0 +1,25 @@
+================================================================================
+VARDHMAN MAHAVIR MEDICAL COLLEGE & SAFDARJUNG HOSPITAL, NEW DELHI
+DEPARTMENT OF INTERNAL MEDICINE
+Date: 2025-03-10 | CR No: 202503100412 | OPD Room: 14
+Patient: Sunita Devi | 44 Y / Female | ABHA: sunita.devi@abdm
+Dr. Anita Verma, MBBS, MD (Medicine) | DMC Reg: 44102
+================================================================================
+CHIEF COMPLAINTS:
+  - High grade fever with chills x 4 days
+  - Productive cough with yellowish sputum x 3 days
+  - Sore throat & body ache
+
+Rx:
+  1. Tab. Augmentin 625mg (Amoxicillin 500mg + Clavulanic Acid 125mg)
+     Dosage: 1 tablet TDS (thrice daily) after food x 5 days
+     Generic: Amoxicillin + Clavulanate Potassium
+
+  2. Tab. Dolo 650 (Paracetamol 650mg)
+     Dosage: 1 tablet SOS for fever > 100°F (max 3 tabs/day)
+     Generic: Paracetamol
+
+  3. Tab. Pantocid 40 (Pantoprazole 40mg)
+     Dosage: 1 tablet OD empty stomach in the morning x 5 days
+     Generic: Pantoprazole
+================================================================================

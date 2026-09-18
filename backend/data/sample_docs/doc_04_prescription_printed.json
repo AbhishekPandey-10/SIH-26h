@@ -1,0 +1,70 @@
+{
+  "document_id": "doc_04_prescription_printed",
+  "document_type": "prescription",
+  "title": "Max Super Speciality Hospital — Pulmonology OPD Prescription",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Bronchial Asthma (Moderate Persistent)",
+      "date": "2025-01-20",
+      "bbox": [
+        0.1,
+        0.19,
+        0.58,
+        0.03
+      ],
+      "confidence": 0.97
+    },
+    {
+      "type": "diagnosis",
+      "value": "Allergic Rhinitis",
+      "date": "2025-01-20",
+      "bbox": [
+        0.1,
+        0.22,
+        0.35,
+        0.03
+      ],
+      "confidence": 0.96
+    },
+    {
+      "type": "medication",
+      "value": "Inhaler Foracort 200",
+      "generic": "Formoterol + Budesonide",
+      "date": "2025-01-20",
+      "bbox": [
+        0.08,
+        0.3,
+        0.65,
+        0.06
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Montair LC",
+      "generic": "Montelukast + Levocetirizine",
+      "date": "2025-01-20",
+      "bbox": [
+        0.08,
+        0.38,
+        0.62,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Nasal Spray Flomist",
+      "generic": "Fluticasone Propionate",
+      "date": "2025-01-20",
+      "bbox": [
+        0.08,
+        0.45,
+        0.6,
+        0.05
+      ],
+      "confidence": 0.97
+    }
+  ]
+}

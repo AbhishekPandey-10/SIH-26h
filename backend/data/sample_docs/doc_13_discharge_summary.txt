@@ -1,0 +1,23 @@
+================================================================================
+VMMC & SAFDARJUNG HOSPITAL, NEW DELHI — CLINICAL DISCHARGE SUMMARY
+Ward: Medicine Male Ward-8 | Bed: 14 | IPD No: IPD-2025-019284
+Patient Name: Suresh Pal | Age: 42 Y / Male | ABHA: suresh.pal@abdm
+Date of Admission: 2025-02-10 | Date of Discharge: 2025-02-13
+================================================================================
+FINAL DIAGNOSIS:
+  Acute Infectious Gastroenteritis with Moderate Dehydration & Hypokalemia (Resolved)
+
+HOSPITAL COURSE:
+  Patient admitted with 15-20 episodes of watery stools and severe cramping.
+  IV Ringer Lactate and KCL rehydration administered. Stool hanging drop negative.
+  Vitals normalized on day 3. Tolerating soft oral diet.
+
+DISCHARGE MEDICATIONS:
+  1. Tab. Ofloxacin 200mg + Ornidazole 500mg (1 tab BD x 3 days)
+  2. Tab. Racecadotril 100mg (1 cap TDS x 2 days)
+  3. Cap. Darolac (Probiotic) 1 cap BD x 7 days
+  4. ORS ad libitum
+
+FOLLOW UP: Medical OPD on 2025-02-20.
+Dr. Manoj Gupta, MD (Assistant Professor)
+================================================================================

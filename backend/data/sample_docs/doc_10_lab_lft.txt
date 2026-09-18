@@ -1,0 +1,17 @@
+================================================================================
+SRL DIAGNOSTICS — LIVER FUNCTION TEST (LFT) REPORT
+Patient: Ramesh Chand | 61 Y / M | Date: 2025-03-01 | Sample: Serum
+================================================================================
+TEST NAME                    RESULT    FLAG      UNIT        BIOLOGICAL REF
+--------------------------------------------------------------------------------
+Bilirubin Total              1.8       HIGH      mg/dL       0.2 - 1.2
+Bilirubin Direct             0.6       HIGH      mg/dL       0.0 - 0.3
+SGOT / AST                   88        HIGH      U/L         10 - 40
+SGPT / ALT                   104       HIGH      U/L         10 - 45
+Alkaline Phosphatase (ALP)   180                 U/L         40 - 240
+Total Protein                6.8                 g/dL        6.0 - 8.3
+Serum Albumin                3.4                 g/dL        3.5 - 5.0
+A/G Ratio                    1.0                 ratio       1.0 - 2.1
+--------------------------------------------------------------------------------
+IMPRESSION: Mild transaminitis with indirect predominant hyperbilirubinemia.
+================================================================================

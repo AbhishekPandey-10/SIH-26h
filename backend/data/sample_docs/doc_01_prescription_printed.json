@@ -1,0 +1,82 @@
+{
+  "document_id": "doc_01_prescription_printed",
+  "document_type": "prescription",
+  "title": "AIIMS New Delhi — Department of Medicine OPD Prescription",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Type 2 Diabetes Mellitus",
+      "date": "2025-03-15",
+      "bbox": [
+        0.12,
+        0.22,
+        0.45,
+        0.03
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "diagnosis",
+      "value": "Essential Systemic Hypertension",
+      "date": "2025-03-15",
+      "bbox": [
+        0.12,
+        0.25,
+        0.48,
+        0.03
+      ],
+      "confidence": 0.97
+    },
+    {
+      "type": "diagnosis",
+      "value": "Dyslipidemia",
+      "date": "2025-03-15",
+      "bbox": [
+        0.12,
+        0.28,
+        0.25,
+        0.03
+      ],
+      "confidence": 0.96
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Glycomet GP 1",
+      "generic": "Metformin + Glimepiride",
+      "date": "2025-03-15",
+      "bbox": [
+        0.08,
+        0.35,
+        0.65,
+        0.06
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Telma 40",
+      "generic": "Telmisartan",
+      "date": "2025-03-15",
+      "bbox": [
+        0.08,
+        0.43,
+        0.55,
+        0.06
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Rosuvas 10",
+      "generic": "Rosuvastatin",
+      "date": "2025-03-15",
+      "bbox": [
+        0.08,
+        0.51,
+        0.55,
+        0.06
+      ],
+      "confidence": 0.99
+    }
+  ]
+}

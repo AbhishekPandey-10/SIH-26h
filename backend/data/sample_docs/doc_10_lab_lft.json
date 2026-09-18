@@ -1,0 +1,71 @@
+{
+  "document_id": "doc_10_lab_lft",
+  "document_type": "lab_report",
+  "title": "SRL Diagnostics — Liver Function Test (LFT) Profile",
+  "entities": [
+    {
+      "type": "lab_value",
+      "value": "1.8",
+      "generic": "Bilirubin Total",
+      "unit": "mg/dL",
+      "reference_range": "0.2 - 1.2",
+      "is_abnormal": true,
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.28,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "88",
+      "generic": "SGOT",
+      "unit": "U/L",
+      "reference_range": "10 - 40",
+      "is_abnormal": true,
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.36,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "104",
+      "generic": "SGPT",
+      "unit": "U/L",
+      "reference_range": "10 - 45",
+      "is_abnormal": true,
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.4,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "lab_value",
+      "value": "180",
+      "generic": "Alkaline Phosphatase",
+      "unit": "U/L",
+      "reference_range": "40 - 240",
+      "is_abnormal": false,
+      "date": "2025-03-01",
+      "bbox": [
+        0.1,
+        0.44,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.98
+    }
+  ]
+}

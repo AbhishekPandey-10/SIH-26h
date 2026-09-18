@@ -1,0 +1,57 @@
+{
+  "document_id": "doc_15_discharge_summary",
+  "document_type": "discharge_summary",
+  "title": "AIIMS New Delhi — Discharge Summary (Cellulitis with Uncontrolled T2DM)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Right Lower Extremity Cellulitis with Diabetic Foot Ulcer",
+      "date": "2025-01-04",
+      "bbox": [
+        0.1,
+        0.2,
+        0.7,
+        0.03
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "procedure",
+      "value": "Wound Debridement Right Foot",
+      "date": "2025-01-05",
+      "bbox": [
+        0.1,
+        0.28,
+        0.55,
+        0.03
+      ],
+      "confidence": 0.97
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Linezolid 600mg",
+      "generic": "Linezolid",
+      "date": "2025-01-11",
+      "bbox": [
+        0.08,
+        0.38,
+        0.55,
+        0.05
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "medication",
+      "value": "Inj. Mixtard 30/70",
+      "generic": "Human Biphasic Insulin",
+      "date": "2025-01-11",
+      "bbox": [
+        0.08,
+        0.5,
+        0.65,
+        0.05
+      ],
+      "confidence": 0.99
+    }
+  ]
+}

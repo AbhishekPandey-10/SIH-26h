@@ -1,0 +1,21 @@
+================================================================================
+DR. LAL PATHLABS — NATIONAL REFERENCE LABORATORY, NEW DELHI
+LABORATORY INVESTIGATION REPORT: COMPLETE BLOOD COUNT (CBC)
+Patient: Rajesh Kumar | 52 Y / M | Date: 2025-03-14 | Lab No: 91823101
+Ref By: Dr. S. K. Sharma (AIIMS)
+================================================================================
+TEST NAME                    RESULT    FLAG      UNIT        REFERENCE RANGE
+--------------------------------------------------------------------------------
+Hemoglobin (Hb)              9.8       LOW       g/dL        13.0 - 17.0
+Total Leukocyte Count (TLC) 12,400     HIGH      /cumm       4,000 - 10,000
+Neutrophils                  78        HIGH      %           40 - 70
+Lymphocytes                  16        LOW       %           20 - 45
+Eosinophils                  3                   %           1 - 6
+Monocytes                    3                   %           2 - 8
+Platelet Count               185,000             /cumm       150,000 - 410,000
+Packed Cell Volume (PCV)     31.2      LOW       %           40.0 - 50.0
+Mean Corpuscular Volume      74.0      LOW       fL          80.0 - 100.0
+ESR (Westergren)             42        HIGH      mm/1st hr   0 - 15
+--------------------------------------------------------------------------------
+INTERPRETATION: Microcytic hypochromic anemia with neutrophilic leukocytosis.
+================================================================================

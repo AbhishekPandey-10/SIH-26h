@@ -8,7 +8,8 @@ chief_complaint -> socrates_branch -> pmh -> medications -> allergies -> family_
 
 import logging
 from typing import Any, Literal, TypedDict
-from langgraph.graph import StateGraph, START, END
+
+from langgraph.graph import END, START, StateGraph
 
 from app.shared.schemas import NextQuestion
 

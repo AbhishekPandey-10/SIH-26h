@@ -1,0 +1,58 @@
+{
+  "document_id": "doc_05_prescription_printed",
+  "document_type": "prescription",
+  "title": "Fortis Escorts — Endocrinology Prescription (Triple Therapy)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Type 2 Diabetes with Microalbuminuria",
+      "date": "2025-03-02",
+      "bbox": [
+        0.1,
+        0.18,
+        0.6,
+        0.03
+      ],
+      "confidence": 0.97
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Forxiga 10mg",
+      "generic": "Dapagliflozin",
+      "date": "2025-03-02",
+      "bbox": [
+        0.08,
+        0.25,
+        0.55,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Janumet 50/500",
+      "generic": "Sitagliptin + Metformin",
+      "date": "2025-03-02",
+      "bbox": [
+        0.08,
+        0.32,
+        0.62,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Volibo 0.3",
+      "generic": "Voglibose",
+      "date": "2025-03-02",
+      "bbox": [
+        0.08,
+        0.39,
+        0.52,
+        0.05
+      ],
+      "confidence": 0.98
+    }
+  ]
+}

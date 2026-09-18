@@ -1,0 +1,17 @@
+================================================================================
+MAX LAB — BIOCHEMISTRY DEPARTMENT
+REPORT: RENAL / KIDNEY FUNCTION TEST (KFT)
+Patient: Amit Sharma | 58 Y / M | Date: 2025-02-27 | Barcode: MXKFT-99120
+================================================================================
+TEST                         RESULT    FLAG      UNIT        NORMAL RANGE
+--------------------------------------------------------------------------------
+Blood Urea                   48.0      HIGH      mg/dL       15.0 - 40.0
+Serum Creatinine             1.65      HIGH      mg/dL       0.70 - 1.20
+Estimated GFR (CKD-EPI)      48        LOW       mL/min/1.73m2 >= 60
+Serum Uric Acid              7.8       HIGH      mg/dL       3.5 - 7.2
+Sodium (Na+)                 138                 mEq/L       135 - 145
+Potassium (K+)               4.7                 mEq/L       3.5 - 5.1
+Chloride (Cl-)               101                 mEq/L       96 - 106
+--------------------------------------------------------------------------------
+REMARKS: Reduced eGFR consistent with CKD Stage 3a. Serum Creatinine elevated.
+================================================================================

@@ -1,0 +1,30 @@
+================================================================================
+ALL INDIA INSTITUTE OF MEDICAL SCIENCES (AIIMS), NEW DELHI
+अखिल भारतीय आयुर्विज्ञान संस्थान, नई दिल्ली
+DEPARTMENT OF GENERAL MEDICINE — OPD PRESCRIPTION
+Date: 2025-03-15 | UHID: 105829148 | OPD Reg No: MED-2025-08912
+Patient Name: Rajesh Kumar | Age: 52 Y / Male | ABHA: rajesh.kumar@abdm
+Dr. S. K. Sharma, MD (Med), FICP | Reg No: MCI-29184
+================================================================================
+CLINICAL DIAGNOSIS:
+  1. Type 2 Diabetes Mellitus (Uncontrolled)
+  2. Essential Systemic Hypertension (Grade 1)
+  3. Dyslipidemia
+
+Rx (MEDICATIONS):
+  1. Tab. Glycomet GP 1 (Metformin 500mg + Glimepiride 1mg)
+     Sig: 1 tab orally twice daily, before meals (OD morning + OD night)
+     Duration: 30 days | Generic: Metformin + Glimepiride
+
+  2. Tab. Telma 40 (Telmisartan 40mg)
+     Sig: 1 tab orally once daily, morning after breakfast
+     Duration: 30 days | Generic: Telmisartan
+
+  3. Tab. Rosuvas 10 (Rosuvastatin 10mg)
+     Sig: 1 tab orally once daily at bedtime
+     Duration: 30 days | Generic: Rosuvastatin
+
+ADVICE / INSTRUCTIONS:
+  - Diabetic diet, low salt intake (< 5g/day), brisk walk 30 mins daily
+  - Review in OPD after 1 month with Fasting Blood Sugar & Serum Creatinine
+================================================================================

@@ -1,0 +1,70 @@
+{
+  "document_id": "doc_14_discharge_summary",
+  "document_type": "discharge_summary",
+  "title": "Fortis Escorts — Discharge Summary (Anterior Wall STEMI / PTCA)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Acute Anterior Wall Myocardial Infarction (STEMI)",
+      "date": "2024-11-12",
+      "bbox": [
+        0.1,
+        0.2,
+        0.65,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "procedure",
+      "value": "Primary PTCA with Drug Eluting Stent to LAD",
+      "date": "2024-11-12",
+      "bbox": [
+        0.1,
+        0.26,
+        0.65,
+        0.03
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Ticagrelor 90mg",
+      "generic": "Ticagrelor",
+      "date": "2024-11-16",
+      "bbox": [
+        0.08,
+        0.44,
+        0.55,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Aspirin 75mg",
+      "generic": "Aspirin",
+      "date": "2024-11-16",
+      "bbox": [
+        0.08,
+        0.5,
+        0.5,
+        0.05
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Atorvastatin 40mg",
+      "generic": "Atorvastatin",
+      "date": "2024-11-16",
+      "bbox": [
+        0.08,
+        0.56,
+        0.55,
+        0.05
+      ],
+      "confidence": 0.99
+    }
+  ]
+}

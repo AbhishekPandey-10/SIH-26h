@@ -1,0 +1,58 @@
+{
+  "document_id": "doc_08_prescription_handwritten",
+  "document_type": "prescription",
+  "title": "Neurology Clinic Slip (Handwritten Format - Generalized Seizure)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Generalized Tonic-Clonic Seizures (GTCS / Epilepsy)",
+      "date": "2025-02-18",
+      "bbox": [
+        0.05,
+        0.15,
+        0.65,
+        0.05
+      ],
+      "confidence": 0.95
+    },
+    {
+      "type": "medication",
+      "value": "Tab Levepsy 500",
+      "generic": "Levetiracetam",
+      "date": "2025-02-18",
+      "bbox": [
+        0.05,
+        0.32,
+        0.6,
+        0.06
+      ],
+      "confidence": 0.96
+    },
+    {
+      "type": "medication",
+      "value": "Tab Frisium 10",
+      "generic": "Clobazam",
+      "date": "2025-02-18",
+      "bbox": [
+        0.05,
+        0.4,
+        0.55,
+        0.06
+      ],
+      "confidence": 0.94
+    },
+    {
+      "type": "medication",
+      "value": "Tab Shelcal 500",
+      "generic": "Calcium + Vitamin D3",
+      "date": "2025-02-18",
+      "bbox": [
+        0.05,
+        0.48,
+        0.58,
+        0.06
+      ],
+      "confidence": 0.95
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "document_id": "doc_02_prescription_printed",
+  "document_type": "prescription",
+  "title": "Safdarjung Hospital — OPD Prescription (Acute Respiratory Infection)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Acute Bronchitis / Lower Respiratory Infection",
+      "date": "2025-03-10",
+      "bbox": [
+        0.1,
+        0.22,
+        0.6,
+        0.04
+      ],
+      "confidence": 0.95
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Augmentin 625mg",
+      "generic": "Amoxicillin + Clavulanate",
+      "date": "2025-03-10",
+      "bbox": [
+        0.08,
+        0.36,
+        0.62,
+        0.06
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Dolo 650",
+      "generic": "Paracetamol",
+      "date": "2025-03-10",
+      "bbox": [
+        0.08,
+        0.44,
+        0.58,
+        0.06
+      ],
+      "confidence": 0.99
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Pantocid 40",
+      "generic": "Pantoprazole",
+      "date": "2025-03-10",
+      "bbox": [
+        0.08,
+        0.52,
+        0.58,
+        0.06
+      ],
+      "confidence": 0.98
+    }
+  ]
+}

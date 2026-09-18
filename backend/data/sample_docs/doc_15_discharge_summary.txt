@@ -1,0 +1,20 @@
+================================================================================
+AIIMS NEW DELHI — INPATIENT DISCHARGE SUMMARY
+Department: Surgery Unit III | IP No: 2025-0038102
+Patient: Baldev Singh | Age: 64 Y / M | ABHA: baldev.singh@abdm
+Adm: 2025-01-04 | Disch: 2025-01-11
+================================================================================
+DIAGNOSIS:
+  Right Lower Extremity Cellulitis with Diabetic Foot Ulcer (Wagner Grade II)
+  Underlying T2DM with Peripheral Neuropathy
+
+OPERATIVE INTERVENTION:
+  Wound debridement under local anesthesia on 2025-01-05. Pus culture: Staph aureus.
+
+DISCHARGE MEDS:
+  1. Tab. Linezolid 600mg (1 tab BD x 7 days)
+  2. Tab. Cefuroxime Axetil 500mg (1 tab BD x 7 days)
+  3. Inj. Mixtard 30/70 (18 units morning, 12 units night before food)
+  4. Tab. Pregabalin 75mg (1 tab at night)
+  5. Daily sterile saline dressing.
+================================================================================

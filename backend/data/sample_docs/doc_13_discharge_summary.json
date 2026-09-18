@@ -1,0 +1,57 @@
+{
+  "document_id": "doc_13_discharge_summary",
+  "document_type": "discharge_summary",
+  "title": "Safdarjung Hospital — Inpatient Discharge Summary (Acute Diarrheal Illness)",
+  "entities": [
+    {
+      "type": "diagnosis",
+      "value": "Acute Infectious Gastroenteritis with Moderate Dehydration",
+      "date": "2025-02-10",
+      "bbox": [
+        0.1,
+        0.22,
+        0.7,
+        0.03
+      ],
+      "confidence": 0.98
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Ofloxacin + Ornidazole",
+      "generic": "Ofloxacin + Ornidazole",
+      "date": "2025-02-13",
+      "bbox": [
+        0.08,
+        0.42,
+        0.6,
+        0.05
+      ],
+      "confidence": 0.97
+    },
+    {
+      "type": "medication",
+      "value": "Tab. Racecadotril 100mg",
+      "generic": "Racecadotril",
+      "date": "2025-02-13",
+      "bbox": [
+        0.08,
+        0.48,
+        0.55,
+        0.05
+      ],
+      "confidence": 0.96
+    },
+    {
+      "type": "procedure",
+      "value": "IV Hydration & Electrolyte Correction",
+      "date": "2025-02-10",
+      "bbox": [
+        0.1,
+        0.32,
+        0.55,
+        0.03
+      ],
+      "confidence": 0.95
+    }
+  ]
+}

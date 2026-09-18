@@ -1,27 +1,145 @@
 """
-SQLAlchemy ORM Models — Dev 1 Tables Only
+SQLAlchemy ORM Models — All 8 Monorepo Tables (Dev 1 + Dev 2)
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
-Dev 1 owns:
-- interview_transcripts
-- summaries
-- red_flag_events
-
-Note: Dev 2 owns patients, sessions, consent_audit, documents, extracted_entities.
-Foreign keys reference session_id as string/UUID without cross-ownership constraint hardlocks.
+Ownership division:
+- Dev 2: Patient, Session, ConsentAudit, Document, ExtractedEntity
+- Dev 1: InterviewTranscript, ClinicalSummary, RedFlagEventModel
 """
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Dict, List
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
     pass
 
+
+# ==============================================================================
+# DEV 2 MODELS (Identity, Consent, Documents & Data Track)
+# ==============================================================================
+
+class Patient(Base):
+    """
+    Patient master record verified via ABHA / Aadhaar.
+    """
+    __tablename__ = "patients"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    abha_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    abha_number: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    gender: Mapped[str] = mapped_column(String(8), nullable=False)  # 'M', 'F', 'O'
+    dob: Mapped[str] = mapped_column(String(16), nullable=False)  # 'YYYY-MM-DD'
+    mobile: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    district: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+
+
+class Session(Base):
+    """
+    Kiosk encounter session lifecycle and audit.
+    """
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    patient_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("patients.id"), nullable=True)
+    language: Mapped[str] = mapped_column(String(8), default="hi", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)  # active, completed, wiped
+    is_caregiver: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_sessions_patient_status", "patient_id", "status"),
+    )
+
+
+class ConsentAudit(Base):
+    """
+    Granular audit log of patient consent agreements.
+    """
+    __tablename__ = "consent_audit"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    patient_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    consent_type: Mapped[str] = mapped_column(String(64), nullable=False)  # abha_data_pull, voice_recording
+    granted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+
+
+class Document(Base):
+    """
+    Scanned medical records captured by kiosk camera or uploaded.
+    """
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_type: Mapped[str | None] = mapped_column(String(32), nullable=True)  # prescription, lab, discharge
+    page_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="uploaded", nullable=False)  # uploaded, extracted
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+
+
+class ExtractedEntityModel(Base):
+    """
+    Structured clinical entities parsed by Module B document OCR pipeline.
+    """
+    __tablename__ = "extracted_entities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    document_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)  # medication, diagnosis, lab_value
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    generic_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    bounding_box: Mapped[List[float] | None] = mapped_column(JSON, nullable=True)  # [x, y, w, h] (0-1)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reference_range: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_abnormal: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+
+# ==============================================================================
+# DEV 1 MODELS (Conversation & Intelligence Track)
+# ==============================================================================
 
 class InterviewTranscript(Base):
     """
@@ -59,13 +177,13 @@ class ClinicalSummary(Base):
     session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
-    hpi_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    pmh_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    medications_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    allergies_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    family_personal_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    ros_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)  # draft, confirmed, pushed
+    hpi_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    pmh_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    medications_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    allergies_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    family_personal_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    ros_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
     doctor_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

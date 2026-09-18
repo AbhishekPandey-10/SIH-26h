@@ -1,0 +1,16 @@
+================================================================================
+THYROCARE TECHNOLOGIES LTD — CENTRAL PROCESSING LABORATORY
+TEST: HbA1c (GLYCATED HEMOGLOBIN) BY HPLC METHOD
+Patient: Rajesh Kumar | 52 Y / M | Date: 2025-03-14 | Acc No: TC-882194
+================================================================================
+TEST NAME                    RESULT    FLAG      UNIT        TARGET / RANGE
+--------------------------------------------------------------------------------
+HbA1c (Glycated Hb)          9.2       HIGH      %           < 5.7 (Normal)
+                                                             5.7 - 6.4 (Prediabetes)
+                                                             >= 6.5 (Diabetes)
+Estimated Average Glucose    217       HIGH      mg/dL       100 - 140
+Blood Glucose Fasting (FBS)  184       HIGH      mg/dL       70 - 100
+Blood Glucose PP (Post-Meal) 262       HIGH      mg/dL       < 140
+--------------------------------------------------------------------------------
+CLINICAL COMMENT: HbA1c > 8.0 indicates poor glycemic control over past 90 days.
+================================================================================
