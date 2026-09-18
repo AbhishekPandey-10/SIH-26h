@@ -277,3 +277,27 @@ class FHIRPushQueue(Base):
         onupdate=lambda: datetime.now(UTC),
         nullable=False
     )
+
+
+class SummaryResolution(Base):
+    """
+    Audit log of doctor resolutions on conflicting clinical summary fields.
+    Records whether doctor preferred document evidence, patient verbal report, or custom clinical judgment.
+    """
+    __tablename__ = "summary_resolutions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    field_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    doctor_id: Mapped[str] = mapped_column(String(64), default="doc_opd_01", nullable=False)
+    resolution_choice: Mapped[str] = mapped_column(String(32), nullable=False)  # use_document, use_patient, custom
+    document_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    patient_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_value: Mapped[str] = mapped_column(Text, nullable=False)
+    doctor_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+

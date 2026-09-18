@@ -16,12 +16,17 @@ import { BboxOverlay } from '../components/documents/BboxOverlay';
 import { DocumentList } from '../components/documents/DocumentList';
 import { DocumentWorkflow } from '../components/documents/DocumentWorkflow';
 
-// Module C Components
+// Module C & Evidence Components
 import { SummarySection } from '../components/doctor/SummarySection';
 import { AskBackPanel } from '../components/doctor/AskBackPanel';
 import { ConfirmPush } from '../components/doctor/ConfirmPush';
 import { SummaryView } from '../components/doctor/SummaryView';
 import { DoctorDashboard } from '../pages/DoctorDashboard';
+import { DocumentSourceView } from '../components/doctor/DocumentSourceView';
+import { ClickToSource, formatCitationText } from '../components/doctor/ClickToSource';
+import { ContradictionPanel } from '../components/doctor/ContradictionPanel';
+import { RedFlagAlert } from '../components/interview/RedFlagAlert';
+import { StaffAlertPanel } from '../components/interview/StaffAlertPanel';
 
 describe('Design System Constants and Configurations', () => {
   it('defines all Pan-India languages with native scripts including Punjabi, Odia, Assamese, and Urdu', () => {
@@ -65,6 +70,8 @@ describe('Design System Constants and Configurations', () => {
     expect(IdleTimeoutOverlay).toBeDefined();
     expect(InterviewScreen).toBeDefined();
     expect(ConsentFlow).toBeDefined();
+    expect(RedFlagAlert).toBeDefined();
+    expect(StaffAlertPanel).toBeDefined();
   });
 
   it('exports all Module B Document OCR & Extraction components without runtime crashes', () => {
@@ -82,5 +89,15 @@ describe('Design System Constants and Configurations', () => {
     expect(ConfirmPush).toBeDefined();
     expect(SummaryView).toBeDefined();
     expect(DoctorDashboard).toBeDefined();
+    expect(DocumentSourceView).toBeDefined();
+    expect(ClickToSource).toBeDefined();
+    expect(ContradictionPanel).toBeDefined();
+  });
+
+  it('formats Click-to-Source citation texts correctly for transcript and documents', () => {
+    expect(formatCitationText({ type: 'transcript', ref_id: 'q_cc_05' })).toBe('From interview Q05');
+    expect(formatCitationText({ type: 'document', page_number: 2 })).toBe('From prescription (pg 2)');
+    expect(formatCitationText({ type: 'document', ref_id: 'ent_lab_01', page_number: 1 })).toBe('From lab report (pg 1)');
   });
 });
+

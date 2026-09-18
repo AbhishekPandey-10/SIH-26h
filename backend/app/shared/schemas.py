@@ -7,6 +7,7 @@ This file defines the strict Pydantic v2 schemas that form the API contract betw
 - Dev 2 (Documents, Data & Infrastructure): ExtractedEntity (TODO stub), FHIRBundlePayload (TODO stub)
 """
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -78,22 +79,29 @@ class SummarySource(BaseModel):
     """
     Source citation linking a summary field to either transcript or scanned document crop.
     """
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
     type: Literal["transcript", "document"] = Field(..., description="Source medium")
     ref_id: str = Field(..., description="ID of transcript turn or scanned document")
     snippet: str | None = Field(None, description="Verbatim text snippet or citation")
     bbox_crop_url: str | None = Field(None, description="URL to cropped document bounding box image")
+    document_id: str | None = Field(None, description="Scanned document ID if applicable")
+    page_number: int | None = Field(None, description="Page number of the document")
+    bounding_box: list[float] | None = Field(None, description="Normalized [x, y, w, h]")
+    confidence: float | None = Field(None, description="OCR extraction confidence")
+    entity_value: str | None = Field(None, description="Extracted entity string value")
 
 
 class SummaryField(BaseModel):
     """
     Structured field in the clinical intake summary presented to the doctor.
     """
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="allow")
 
     field_id: str = Field(..., description="Unique field identifier")
     section: str = Field(
         ...,
-        description="Summary section: 'chief_complaint', 'hpi', 'pmh', 'medications', 'allergies', 'ros', 'family_personal'"
+        description="Summary section: 'chief_complaint', 'hpi', 'pmh', 'medications', 'allergies', 'ros', 'family_personal', 'changes_since_last_visit'"
     )
     content: str = Field(..., description="Clinically normalized summary statement")
     sources: list[SummarySource] = Field(
@@ -114,6 +122,51 @@ class SummaryField(BaseModel):
         default=False,
         description="True if Contradiction Radar flagged a change compared to previous visits"
     )
+    document_value: str | None = Field(None, description="Extracted document value for conflicting fields")
+    patient_value: str | None = Field(None, description="Reported patient value for conflicting fields")
+
+
+class ContradictionItem(BaseModel):
+    """
+    Contradiction or medication/diagnosis delta detected between current interview and historical records.
+    """
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    id: str = Field(default_factory=lambda: f"contra_{uuid.uuid4().hex[:8]}")
+    field: str = Field(..., description="Clinical field or medication category")
+    old_value: str = Field(..., description="Prior recorded value or prescription dose")
+    old_source: str = Field(..., description="Source text or citation of historical record")
+    new_value: str = Field(..., description="Current stated or prescribed value")
+    new_source: str = Field(..., description="Source text or citation of current interview turn")
+    change_type: Literal["dosage_change", "started", "stopped", "new_diagnosis", "discrepancy"] = Field(...)
+    significance: Literal["high", "medium", "low"] = Field(default="medium")
+    status: Literal["unreviewed", "confirmed", "flagged_error"] = Field(default="unreviewed")
+    old_source_ref: dict[str, Any] | None = None
+    new_source_ref: dict[str, Any] | None = None
+
+
+class PolypharmacyAlert(BaseModel):
+    """
+    Alert for duplicated generic entities or dangerous drug-drug interactions.
+    """
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    type: Literal["brand_generic_duplicate", "drug_interaction", "contraindication"] = Field(...)
+    drug_a: str = Field(...)
+    drug_b: str | None = None
+    severity: Literal["high", "medium", "low"] = Field(default="medium")
+    message: str = Field(...)
+
+
+class ResolveFieldRequest(BaseModel):
+    """
+    Doctor's resolution choice on a conflicting summary field.
+    """
+    resolution_choice: Literal["use_document", "use_patient", "custom"] = Field(...)
+    resolved_value: str = Field(...)
+    doctor_id: str | None = Field(default="doc_opd_01")
+    doctor_note: str | None = Field(default=None)
+
 
 
 class RedFlagEvent(BaseModel):

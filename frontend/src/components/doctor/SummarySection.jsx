@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { VerificationBadge } from './VerificationBadge';
 import AskBackPanel from './AskBackPanel';
+import ClickToSource from './ClickToSource';
 import {
   ChevronDown,
   ChevronUp,
@@ -13,6 +14,10 @@ import {
   ExternalLink,
   History,
   Pill,
+  Split,
+  User,
+  CheckCircle2,
+  HelpCircle,
 } from 'lucide-react';
 
 export const SummarySection = ({
@@ -29,7 +34,11 @@ export const SummarySection = ({
   const [isSaving, setIsSaving] = useState(false);
   const [showAskBack, setShowAskBack] = useState(false);
   const [patientAnswerNotification, setPatientAnswerNotification] = useState(null);
-  const [showCropPreview, setShowCropPreview] = useState(null);
+
+  // Conflicting Resolution State
+  const [isResolvingConflict, setIsResolvingConflict] = useState(false);
+  const [customResolutionText, setCustomResolutionText] = useState('');
+  const [showCustomInput, setShowCustomInput] = useState(false);
 
   if (!field) return null;
 
@@ -77,15 +86,57 @@ export const SummarySection = ({
     }
   };
 
+  // Doctor resolves conflicting field
+  const handleResolveConflict = async (choice, value) => {
+    setIsResolvingConflict(true);
+    try {
+      const res = await fetch(`/api/summary/${sessionId}/resolve/${field.field_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resolution_choice: choice,
+          resolved_value: value,
+          doctor_id: 'doc_opd_01',
+          doctor_note: `Discrepancy resolved by physician preferring ${choice}.`,
+        }),
+      });
+
+      if (res.ok) {
+        const updated = await res.json();
+        setShowCustomInput(false);
+        if (onFieldUpdated) {
+          onFieldUpdated(updated);
+        }
+      }
+    } catch (err) {
+      console.warn('[SummarySection] Conflict resolution error:', err);
+    } finally {
+      setIsResolvingConflict(false);
+    }
+  };
+
   const isDocEdited = field.verification === 'doctor_edited';
+  const isConflicting = field.verification === 'conflicting';
+
+  // Extract document vs patient values for split-view
+  const docSource = field.sources?.find((s) => s.type === 'document');
+  const patientSource = field.sources?.find((s) => s.type === 'transcript');
+  const docValue = field.document_value || docSource?.entity_value || docSource?.snippet || 'Document value';
+  const patientValue = field.patient_value || patientSource?.snippet || 'Patient verbal report';
 
   return (
     <div
       style={{
         background: '#FFFFFF',
         borderRadius: '14px',
-        border: isDocEdited ? '2px solid #C084FC' : '1.5px solid #E2E8F0',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+        border: isConflicting
+          ? '2px solid #F59E0B'
+          : isDocEdited
+          ? '2px solid #C084FC'
+          : '1.5px solid #E2E8F0',
+        boxShadow: isConflicting
+          ? '0 4px 16px rgba(245, 158, 11, 0.12)'
+          : '0 2px 8px rgba(0,0,0,0.04)',
         overflow: 'hidden',
         marginBottom: '16px',
         transition: 'all 0.15s ease',
@@ -99,7 +150,7 @@ export const SummarySection = ({
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '16px 20px',
-          background: isDocEdited ? '#FAF5FF' : '#F8FAFC',
+          background: isConflicting ? '#FFFBEB' : isDocEdited ? '#FAF5FF' : '#F8FAFC',
           borderBottom: isOpen ? '1px solid #E2E8F0' : 'none',
           cursor: 'pointer',
           userSelect: 'none',
@@ -181,13 +232,207 @@ export const SummarySection = ({
                   POLYPHARMACY / GENERIC DUPLICATION ALERT:
                 </span>
                 <div style={{ fontSize: '13px', color: '#B45309' }}>
-                  {polypharmacyAlerts.join(' • ')}
+                  {polypharmacyAlerts.map((a) => (typeof a === 'string' ? a : a.message)).join(' • ')}
                 </div>
               </div>
             </div>
           )}
 
-          {/* Inline Editable Text Area */}
+          {/* TASK 1 ITEM 5: CONFLICTING DATA SPLIT-VIEW */}
+          {isConflicting && (
+            <div
+              style={{
+                marginBottom: '20px',
+                padding: '16px',
+                background: '#FFFDF5',
+                borderRadius: '12px',
+                border: '1.5px solid #FCD34D',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '12px',
+                  color: '#B45309',
+                  fontWeight: 800,
+                  fontSize: '14px',
+                }}
+              >
+                <Split size={18} />
+                <span>Conflicting Evidence Detected: Discrepancy Between Document & Verbal Report</span>
+              </div>
+
+              {/* Side-by-Side Comparison Grid */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '16px',
+                  marginBottom: '14px',
+                }}
+              >
+                {/* Column 1: Document Value */}
+                <div
+                  style={{
+                    padding: '14px',
+                    background: '#FFFFFF',
+                    borderRadius: '10px',
+                    border: '1.5px solid #86EFAC',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: '#16A34A', textTransform: 'uppercase' }}>
+                    📄 Scanned Document Record:
+                  </div>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A', marginTop: '4px' }}>
+                    {docValue}
+                  </div>
+                  {docSource && (
+                    <div style={{ marginTop: '8px' }}>
+                      <ClickToSource
+                        singleSource={docSource}
+                        customLabel="Inspect Original Crop"
+                        inline
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Column 2: Patient Verbal Value */}
+                <div
+                  style={{
+                    padding: '14px',
+                    background: '#FFFFFF',
+                    borderRadius: '10px',
+                    border: '1.5px solid #93C5FD',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', fontWeight: 800, color: '#2563EB', textTransform: 'uppercase' }}>
+                    🎙️ Patient Stated in Interview:
+                  </div>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A', marginTop: '4px' }}>
+                    {patientValue}
+                  </div>
+                  {patientSource && (
+                    <div style={{ marginTop: '8px' }}>
+                      <ClickToSource
+                        singleSource={patientSource}
+                        customLabel="Inspect Q&A Transcript"
+                        inline
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Doctor Resolution Buttons */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '10px',
+                  paddingTop: '10px',
+                  borderTop: '1px solid #FEF3C7',
+                }}
+              >
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#92400E' }}>
+                  Doctor Resolution:
+                </span>
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => handleResolveConflict('use_document', docValue)}
+                    disabled={isResolvingConflict}
+                    style={{
+                      padding: '7px 14px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #16A34A',
+                      background: '#F0FDF4',
+                      color: '#166534',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✓ Use document value
+                  </button>
+
+                  <button
+                    onClick={() => handleResolveConflict('use_patient', patientValue)}
+                    disabled={isResolvingConflict}
+                    style={{
+                      padding: '7px 14px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #2563EB',
+                      background: '#EFF6FF',
+                      color: '#1E40AF',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✓ Use patient value
+                  </button>
+
+                  <button
+                    onClick={() => setShowCustomInput(!showCustomInput)}
+                    style={{
+                      padding: '7px 14px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #64748B',
+                      background: '#F8FAFC',
+                      color: '#334155',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✎ Write custom
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom Resolution Input */}
+              {showCustomInput && (
+                <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Enter physician reconciled value..."
+                    value={customResolutionText}
+                    onChange={(e) => setCustomResolutionText(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #CBD5E1',
+                      fontSize: '14px',
+                    }}
+                  />
+                  <button
+                    onClick={() => handleResolveConflict('custom', customResolutionText || docValue)}
+                    disabled={!customResolutionText.trim()}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      background: '#0F172A',
+                      color: '#FFF',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Save Resolution
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Standard Content Display / Inline Editing */}
           {isEditing ? (
             <div>
               <textarea
@@ -332,80 +577,15 @@ export const SummarySection = ({
             />
           )}
 
-          {/* Verified Source Citations */}
+          {/* TASK 1 ITEM 1: CLICK-TO-SOURCE EVIDENCE PROVENANCE */}
           {field.sources && field.sources.length > 0 && (
             <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #F1F5F9' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#94A3B8', textTransform: 'uppercase' }}>
-                EVIDENCE PROVENANCE ({field.sources.length} sources):
+                TRACEABLE EVIDENCE CITATIONS ({field.sources.length} sources):
               </span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '6px' }}>
-                {field.sources.map((src, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      background: src.type === 'document' ? '#F0FDF4' : '#EFF6FF',
-                      border: `1px solid ${src.type === 'document' ? '#BBF7D0' : '#BFDBFE'}`,
-                      fontSize: '12px',
-                      color: src.type === 'document' ? '#15803D' : '#1D4ED8',
-                    }}
-                  >
-                    <span>{src.type === 'document' ? '📄 Document Crop' : '🎙️ Patient Voice'}</span>
-                    {src.snippet && (
-                      <span style={{ fontWeight: 600 }}>"{src.snippet.slice(0, 30)}..."</span>
-                    )}
-                    {src.bbox_crop_url && (
-                      <button
-                        onClick={() => setShowCropPreview(src.bbox_crop_url)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#2563EB',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: 0,
-                        }}
-                        title="Inspect Crop"
-                      >
-                        <ExternalLink size={12} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+              <div style={{ marginTop: '8px' }}>
+                <ClickToSource sources={field.sources} />
               </div>
-            </div>
-          )}
-
-          {/* Mini Modal for Crop preview */}
-          {showCropPreview && (
-            <div
-              style={{
-                marginTop: '12px',
-                padding: '12px',
-                borderRadius: '8px',
-                background: '#0F172A',
-                position: 'relative',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#FFF', fontSize: '12px', marginBottom: '6px' }}>
-                <span>Source Bounding-Box Image Crop</span>
-                <button
-                  onClick={() => setShowCropPreview(null)}
-                  style={{ background: 'none', border: 'none', color: '#FFF', cursor: 'pointer' }}
-                >
-                  ✕
-                </button>
-              </div>
-              <img
-                src={showCropPreview}
-                alt="Source Crop"
-                style={{ maxHeight: '180px', maxWidth: '100%', borderRadius: '4px' }}
-              />
             </div>
           )}
         </div>

@@ -278,6 +278,10 @@ def node_pmh(state: InterviewState) -> InterviewState:
         progress_pct=45.0,
         metadata=q_data.get("metadata"),
     )
+    # Smart Recall adaptation: confirm known diagnoses instead of re-asking
+    from app.services.smart_recall import smart_recall_service
+    nq = smart_recall_service.adapt_question_with_recall("pmh", nq, state.get("extracted_context", []), lang)
+
     asked = list(state.get("asked_questions", []))
     asked.append(nq.model_dump())
     return {"current_node": "pmh", "next_question": nq, "asked_questions": asked}
@@ -303,6 +307,10 @@ def node_medications(state: InterviewState) -> InterviewState:
         progress_pct=58.0,
         metadata=q_data.get("metadata"),
     )
+    # Smart Recall adaptation: confirm known active prescriptions
+    from app.services.smart_recall import smart_recall_service
+    nq = smart_recall_service.adapt_question_with_recall("medications", nq, state.get("extracted_context", []), lang)
+
     asked = list(state.get("asked_questions", []))
     asked.append(nq.model_dump())
     return {"current_node": "medications", "next_question": nq, "asked_questions": asked}
@@ -328,9 +336,14 @@ def node_allergies(state: InterviewState) -> InterviewState:
         progress_pct=70.0,
         metadata=q_data.get("metadata"),
     )
+    # Smart Recall adaptation: verify existing documented allergies
+    from app.services.smart_recall import smart_recall_service
+    nq = smart_recall_service.adapt_question_with_recall("allergies", nq, state.get("extracted_context", []), lang)
+
     asked = list(state.get("asked_questions", []))
     asked.append(nq.model_dump())
     return {"current_node": "allergies", "next_question": nq, "asked_questions": asked}
+
 
 
 def node_family_hx(state: InterviewState) -> InterviewState:
@@ -539,9 +552,16 @@ class InterviewEngine:
             }
         return self.sessions[session_id]
 
-    def start_interview(self, session_id: str = "dev-test-001", language: str = "hi") -> NextQuestion:
+    def start_interview(
+        self,
+        session_id: str = "dev-test-001",
+        language: str = "hi",
+        extracted_context: list[dict[str, Any]] | None = None,
+    ) -> NextQuestion:
         state = self.get_or_create_session(session_id, language)
         state["language"] = language
+        if extracted_context is not None:
+            state["extracted_context"] = extracted_context
         # Run through intake and prompt for chief_complaint
         state.update(node_intake(state))
         cc_result = node_chief_complaint(state)
@@ -549,6 +569,7 @@ class InterviewEngine:
         nq = state.get("next_question")
         assert nq is not None
         return nq
+
 
     def step(
         self,

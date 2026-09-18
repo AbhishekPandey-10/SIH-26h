@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.db.models import ClinicalSummary
 from app.services.summary_generator import summary_generator
-from app.shared.schemas import SummaryField
+from app.shared.schemas import ResolveFieldRequest, SummaryField
+
 
 logger = logging.getLogger("medikiosk.routes.summary")
 router = APIRouter(prefix="/api/summary", tags=["Clinical Summary"])
@@ -128,3 +129,81 @@ async def update_summary_field_endpoint(
     await db.commit()
     logger.info(f"Physician updated field {field_id} for session {session_id}")
     return SummaryField.model_validate(matched_field)
+
+
+@router.post("/{session_id}/resolve/{field_id}", response_model=SummaryField)
+async def resolve_summary_field_endpoint(
+    session_id: str,
+    field_id: str,
+    req: ResolveFieldRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/summary/{session_id}/resolve/{field_id}
+    Doctor resolves a conflicting summary field by choosing:
+    - 'use_document': favors document OCR extraction
+    - 'use_patient': favors patient verbal statement
+    - 'custom': writes custom clinical clarification
+    Logs the resolution in the summary_resolutions table for DPDP Act auditability.
+    """
+    from app.db.models import SummaryResolution
+
+    stmt = (
+        select(ClinicalSummary)
+        .where(ClinicalSummary.session_id == session_id)
+        .order_by(ClinicalSummary.version.desc())
+    )
+    res = await db.execute(stmt)
+    summary = res.scalar_one_or_none()
+
+    if not summary or not summary.fields_json:
+        await summary_generator.generate_summary(session_id=session_id, db=db)
+        res = await db.execute(stmt)
+        summary = res.scalar_one_or_none()
+        if not summary or not summary.fields_json:
+            raise HTTPException(status_code=404, detail="Summary not found for session")
+
+    matched_field = None
+    updated_fields = []
+    for field_dict in summary.fields_json:
+        if field_dict.get("field_id") == field_id:
+            # Save original conflicting content if not preserved
+            if "original_content" not in field_dict:
+                field_dict["original_content"] = field_dict.get("content", "")
+
+            # Log audit record in summary_resolutions
+            resolution_log = SummaryResolution(
+                session_id=session_id,
+                field_id=field_id,
+                doctor_id=req.doctor_id or "doc_opd_01",
+                resolution_choice=req.resolution_choice,
+                document_value=field_dict.get("document_value"),
+                patient_value=field_dict.get("patient_value"),
+                resolved_value=req.resolved_value,
+                doctor_note=req.doctor_note,
+            )
+            db.add(resolution_log)
+
+            # Update field
+            field_dict["content"] = req.resolved_value
+            field_dict["verification"] = "doctor_edited"
+            field_dict["changed_since_last"] = True
+            field_dict["resolution"] = {
+                "choice": req.resolution_choice,
+                "doctor_id": req.doctor_id or "doc_opd_01",
+                "resolved_value": req.resolved_value,
+            }
+            matched_field = field_dict
+
+        updated_fields.append(field_dict)
+
+    if not matched_field:
+        raise HTTPException(status_code=404, detail=f"Field {field_id} not found in summary")
+
+    summary.fields_json = updated_fields
+    summary.status = "doctor_verified"
+    await db.commit()
+
+    logger.info(f"Doctor {req.doctor_id} resolved conflicting field {field_id} with choice: {req.resolution_choice}")
+    return SummaryField.model_validate(matched_field)
+

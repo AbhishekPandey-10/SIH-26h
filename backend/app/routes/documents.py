@@ -222,17 +222,32 @@ async def process_document_endpoint(
 @router.get("/{doc_id}/crop")
 async def crop_document_endpoint(
     doc_id: str,
-    x: float = Query(..., ge=0.0, le=1.0, description="Normalized x coordinate (0.0 - 1.0)"),
-    y: float = Query(..., ge=0.0, le=1.0, description="Normalized y coordinate (0.0 - 1.0)"),
-    w: float = Query(..., ge=0.0, le=1.0, description="Normalized width (0.0 - 1.0)"),
-    h: float = Query(..., ge=0.0, le=1.0, description="Normalized height (0.0 - 1.0)"),
+    x: float | None = Query(None, ge=0.0, le=1.0, description="Normalized x coordinate (0.0 - 1.0)"),
+    y: float | None = Query(None, ge=0.0, le=1.0, description="Normalized y coordinate (0.0 - 1.0)"),
+    w: float | None = Query(None, ge=0.0, le=1.0, description="Normalized width (0.0 - 1.0)"),
+    h: float | None = Query(None, ge=0.0, le=1.0, description="Normalized height (0.0 - 1.0)"),
+    bbox: str | None = Query(None, description="Bounding box as 'x,y,w,h' or '[x, y, w, h]'"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     GET /api/documents/{doc_id}/crop
     Crops image at normalized coordinates with 8% drift padding and caches result.
+    Accepts either separate x, y, w, h queries or bbox=x,y,w,h.
     Returns image/jpeg bytes.
     """
+    if bbox:
+        try:
+            cleaned = bbox.strip("[]() ")
+            parts = [float(v.strip()) for v in cleaned.split(",")]
+            if len(parts) >= 4:
+                x, y, w, h = parts[0], parts[1], parts[2], parts[3]
+        except Exception as e:
+            logger.warning(f"Failed to parse bbox '{bbox}': {e}")
+
+    # Fallback default if still None
+    if x is None or y is None or w is None or h is None:
+        x, y, w, h = 0.05, 0.2, 0.5, 0.1
+
     stmt = select(Document).where(Document.id == doc_id)
     res = await db.execute(stmt)
     doc = res.scalar_one_or_none()
@@ -257,12 +272,13 @@ async def crop_document_endpoint(
 
 
 @router.get("/{doc_id}/file")
+@router.get("/{doc_id}/image")
 async def get_document_file_endpoint(
     doc_id: str,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    GET /api/documents/{doc_id}/file
+    GET /api/documents/{doc_id}/file or GET /api/documents/{doc_id}/image
     Serves original document image for browser rendering and bounding-box overlay.
     """
     stmt = select(Document).where(Document.id == doc_id)
@@ -280,6 +296,46 @@ async def get_document_file_endpoint(
         return FileResponse(sample_img)
 
     raise HTTPException(status_code=404, detail="Document image file not found")
+
+
+@router.get("/entity/{entity_id}")
+async def get_single_entity_endpoint(
+    entity_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /api/documents/entity/{entity_id}
+    Retrieves full details for an extracted entity including its document ID,
+    bounding box coordinates, confidence, and value.
+    """
+    stmt = select(ExtractedEntityModel).where(ExtractedEntityModel.id == entity_id)
+    res = await db.execute(stmt)
+    entity = res.scalar_one_or_none()
+
+    if not entity:
+        raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+
+    return {
+        "id": entity.id,
+        "document_id": entity.document_id,
+        "session_id": entity.session_id,
+        "entity_type": entity.entity_type,
+        "value": entity.value,
+        "generic_name": entity.generic_name,
+        "date": entity.date,
+        "bounding_box": entity.bounding_box,
+        "confidence": entity.confidence,
+        "unit": entity.unit,
+        "reference_range": entity.reference_range,
+        "is_abnormal": entity.is_abnormal,
+        "crop_url": (
+            f"/api/documents/{entity.document_id}/crop?bbox={','.join(str(c) for c in entity.bounding_box)}"
+            if entity.bounding_box and len(entity.bounding_box) == 4
+            else None
+        ),
+        "image_url": f"/api/documents/{entity.document_id}/image",
+    }
+
 
 
 @router.get("/entities/{session_id}")

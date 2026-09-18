@@ -1,0 +1,38 @@
+[
+  {
+    "drug_a": "warfarin",
+    "drug_b": "aspirin",
+    "severity": "high",
+    "note": "Severe bleeding risk: Synergistic anticoagulant and antiplatelet effect dramatically elevates major GI and intracranial hemorrhage risk."
+  },
+  {
+    "drug_a": "metformin",
+    "drug_b": "contrast_dye",
+    "severity": "high",
+    "note": "Lactic acidosis risk: Metformin combined with iodinated radiocontrast agents can precipitate acute renal impairment and fatal lactic acidosis."
+  },
+  {
+    "drug_a": "telmisartan",
+    "drug_b": "spironolactone",
+    "severity": "medium",
+    "note": "Hyperkalemia risk: ARB plus potassium-sparing diuretic significantly elevates serum potassium; requires renal and electrolyte monitoring."
+  },
+  {
+    "drug_a": "atorvastatin",
+    "drug_b": "clarithromycin",
+    "severity": "high",
+    "note": "Rhabdomyolysis risk: CYP3A4 inhibition increases statin systemic exposure, increasing risk of severe myopathy and rhabdomyolysis."
+  },
+  {
+    "drug_a": "glimepiride",
+    "drug_b": "aspirin",
+    "severity": "medium",
+    "note": "Hypoglycemia risk: Salicylates displace sulfonylureas from protein binding sites, increasing free drug and risk of profound hypoglycemia."
+  },
+  {
+    "drug_a": "paracetamol",
+    "drug_b": "paracetamol",
+    "severity": "high",
+    "note": "Hepatotoxicity risk: Duplicate paracetamol intake exceeds maximum 4000mg/day threshold, risking acute liver injury."
+  }
+]

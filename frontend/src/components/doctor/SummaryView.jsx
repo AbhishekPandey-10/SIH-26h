@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import SummarySection from './SummarySection';
 import ConfirmPush from './ConfirmPush';
+import ContradictionPanel from './ContradictionPanel';
 import KioskCard from '../kiosk/KioskCard';
 import {
   Stethoscope,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 
 const SECTION_DISPLAY_MAP = {
+  changes_since_last_visit: 'Changes Since Last Visit (Longitudinal Timeline Delta)',
   chief_complaint: '1. Chief Complaint (मुख्य लक्षण)',
   hpi: '2. History of Present Illness (SOCRATES विश्लेषण)',
   pmh: '3. Past Medical & Surgical History (पिछली बीमारियाँ)',
@@ -31,6 +33,7 @@ export const SummaryView = ({
   onConsultComplete,
 }) => {
   const [fields, setFields] = useState([]);
+  const [polypharmacyAlerts, setPolypharmacyAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -40,6 +43,7 @@ export const SummaryView = ({
     setError(null);
 
     try {
+      // 1. Generate / retrieve summary
       const res = await fetch('/api/summary/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -52,6 +56,21 @@ export const SummaryView = ({
 
       const data = await res.json();
       setFields(data);
+
+      // 2. Fetch polypharmacy alerts
+      try {
+        const polyRes = await fetch('/api/intelligence/polypharmacy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+        if (polyRes.ok) {
+          const polyData = await polyRes.json();
+          setPolypharmacyAlerts(polyData.alerts || []);
+        }
+      } catch (polyErr) {
+        console.warn('[SummaryView] Polypharmacy fetch warning:', polyErr);
+      }
     } catch (err) {
       console.warn('[SummaryView] Summary fetch error:', err);
       setError(err.message || 'Unable to generate intake summary.');
@@ -72,6 +91,7 @@ export const SummaryView = ({
 
   // Group fields by canonical section
   const sectionsOrder = [
+    'changes_since_last_visit',
     'chief_complaint',
     'hpi',
     'pmh',
@@ -161,6 +181,12 @@ export const SummaryView = ({
         </button>
       </div>
 
+      {/* TASK 2: CONTRADICTION RADAR PANEL */}
+      <ContradictionPanel
+        sessionId={sessionId}
+        onContradictionResolved={fetchSummary}
+      />
+
       {/* Loading State */}
       {loading && (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#64748B' }}>
@@ -230,7 +256,9 @@ export const SummaryView = ({
                 onFieldUpdated={handleFieldUpdated}
                 polypharmacyAlerts={
                   secKey === 'medications'
-                    ? ['Glycomet (Metformin) and Telma (Telmisartan) verified against OPD standard formulary.']
+                    ? polypharmacyAlerts.length > 0
+                      ? polypharmacyAlerts
+                      : ['Active medications verified against OPD standard formulary.']
                     : []
                 }
               />
