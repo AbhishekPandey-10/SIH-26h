@@ -14,6 +14,8 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db.database import init_db
+from app.routes.abdm import router as abdm_router
+from app.routes.ayush import router as ayush_router
 from app.routes.documents import router as documents_router
 from app.routes.documents import ws_router as scan_ws_router
 from app.routes.fhir import router as fhir_router
@@ -74,12 +76,12 @@ app.include_router(intelligence_router)
 app.include_router(red_flag_router)
 app.include_router(patient_router)
 app.include_router(visualization_router)
-
-
-
+app.include_router(ayush_router)
+app.include_router(abdm_router)
 
 
 @app.get("/health", tags=["System"])
+@app.get("/api/health", tags=["System"])
 async def health_check() -> dict[str, Any]:
     """Health check endpoint for container orchestrators and Kiosk PWA."""
     return {

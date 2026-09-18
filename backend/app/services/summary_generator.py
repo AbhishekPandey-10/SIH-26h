@@ -26,6 +26,11 @@ from app.db.models import (
     ExtractedEntityModel,
     InterviewTranscript,
     RedFlagEventModel,
+    Session,
+)
+from app.services.ayush_service import (
+    evaluate_prakriti_and_dosha,
+    generate_ayush_clinical_lens,
 )
 from app.services.folk_idioms import folk_idiom_normalizer
 from app.services.polypharmacy_detector import polypharmacy_detector
@@ -56,10 +61,17 @@ class SummaryGenerator:
         self,
         session_id: str,
         db: AsyncSession,
+        lens: str = "allopathic",
     ) -> list[SummaryField]:
         """
         Generates and persists structured summary for a session.
+        Supports both Allopathic and Ayurvedic (AYUSH Dashavidha Pariksha) clinical lenses.
         """
+        # Load session details for caregiver and prakriti data
+        stmt_sess = select(Session).where(Session.id == session_id)
+        res_sess = await db.execute(stmt_sess)
+        sess_row = res_sess.scalar_one_or_none()
+
         # 1. Fetch interview transcripts
         stmt_t = (
             select(InterviewTranscript)
@@ -81,6 +93,188 @@ class SummaryGenerator:
         if not entities:
             entities = await self._load_fallback_entities(session_id, db)
 
+        # ----------------------------------------------------------------------
+        # AYURVEDIC DUAL-LENS GENERATION
+        # ----------------------------------------------------------------------
+        if lens == "ayurvedic":
+            cc_text = "General health assessment"
+            hpi_dict = {}
+            for t in transcripts:
+                q_id = t.question_id.lower()
+                ans = t.answer_text or t.text
+                if "cc" in q_id or "chief" in (t.node_name or ""):
+                    cc_text = ans
+                elif "site" in q_id:
+                    hpi_dict["site"] = ans
+                elif "onset" in q_id:
+                    hpi_dict["onset"] = ans
+                elif "char" in q_id:
+                    hpi_dict["character"] = ans
+                elif "rad" in q_id:
+                    hpi_dict["radiation"] = ans
+
+            prakriti_res = (sess_row.prakriti_result if sess_row and sess_row.prakriti_result
+                            else evaluate_prakriti_and_dosha({}))
+            ayush_lens_data = generate_ayush_clinical_lens(cc_text, hpi_dict, prakriti_res)
+
+            ayush_fields: list[SummaryField] = []
+
+            # Caregiver attribution header
+            if sess_row and sess_row.is_caregiver:
+                c_name = sess_row.caregiver_name or "Caregiver"
+                c_rel = f" ({sess_row.caregiver_relationship})" if sess_row.caregiver_relationship else ""
+                ayush_fields.append(
+                    SummaryField(
+                        field_id="sf_caregiver_hdr",
+                        section="chief_complaint",
+                        content=f"History provided by caregiver: {c_name}{c_rel} on behalf of patient.",
+                        sources=[SummarySource(type="transcript", ref_id="proxy_attribution", snippet=f"Proxy: {c_name}{c_rel}")],
+                        verification="patient_reported",
+                    )
+                )
+
+            # 1. Prakriti & Constitution
+            p_scores = prakriti_res.get("scores", {})
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_prakriti",
+                    section="pmh",
+                    content=f"Prakriti: {prakriti_res.get('prakriti_type')} | Primary: {prakriti_res.get('primary_dosha')} (V: {p_scores.get('vata', 0)}%, P: {p_scores.get('pitta', 0)}%, K: {p_scores.get('kapha', 0)}%)",
+                    sources=[SummarySource(type="transcript", ref_id="ayush_prakriti", snippet="Dashavidha Pariksha")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 2. Nidana (Aetiology)
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_nidana",
+                    section="hpi",
+                    content="Nidana (Aetiological Triggers): " + "; ".join(ayush_lens_data.get("nidana", [])),
+                    sources=[SummarySource(type="transcript", ref_id="ayush_vikriti", snippet="Nidana pariksha")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 3. Purvarupa (Prodromal signs)
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_purvarupa",
+                    section="hpi",
+                    content="Purvarupa (Prodromal Symptoms): " + "; ".join(ayush_lens_data.get("purvarupa", [])),
+                    sources=[SummarySource(type="transcript", ref_id="ayush_sara", snippet="Purvarupa signs")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 4. Rupa (Manifest signs)
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_rupa",
+                    section="chief_complaint",
+                    content="Rupa (Clinical Signs & Symptoms): " + "; ".join(ayush_lens_data.get("rupa", [])),
+                    sources=[SummarySource(type="transcript", ref_id="q_cc_01", snippet=cc_text)],
+                    verification="patient_reported",
+                )
+            )
+
+            # 5. Upashaya / Anupashaya
+            up_dict = ayush_lens_data.get("upashaya", {})
+            up_str = "Upashaya (Relieving): " + "; ".join(up_dict.get("upashaya_relieving", [])) + " | Anupashaya (Aggravating): " + "; ".join(up_dict.get("anupashaya_aggravating", []))
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_upashaya",
+                    section="hpi",
+                    content=up_str,
+                    sources=[SummarySource(type="transcript", ref_id="ayush_satmya", snippet="Upashaya")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 6. Samprapti (Pathogenesis)
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_samprapti",
+                    section="hpi",
+                    content="Samprapti (Pathogenesis Sequence): " + ayush_lens_data.get("samprapti", {}).get("summary", ""),
+                    sources=[SummarySource(type="transcript", ref_id="ayush_samhanana", snippet="Samprapti analysis")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 7. Agni & Koshtha
+            ak_dict = ayush_lens_data.get("agni_koshtha", {})
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_agni_koshtha",
+                    section="ros",
+                    content=f"Agni & Koshtha: {ak_dict.get('agni_status')} & {ak_dict.get('koshtha_type')}. {ak_dict.get('clinical_note')}",
+                    sources=[SummarySource(type="transcript", ref_id="ayush_ahara_shakti", snippet="Agni assessment")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 8. Pathya & Apathya
+            pa_dict = ayush_lens_data.get("pathya_apathya", {})
+            pa_str = "Pathya (Do's): " + "; ".join(pa_dict.get("pathya", [])) + " | Apathya (Don'ts): " + "; ".join(pa_dict.get("apathya", []))
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_pathya",
+                    section="personal_hx",
+                    content=pa_str,
+                    sources=[SummarySource(type="transcript", ref_id="ayush_satva", snippet="Pathya-Apathya")],
+                    verification="patient_reported",
+                )
+            )
+
+            # 9. Chikitsa Sootra
+            ayush_fields.append(
+                SummaryField(
+                    field_id="sf_ayush_chikitsa",
+                    section="medications",
+                    content="Chikitsa Sootra (Therapeutic Protocol): " + ayush_lens_data.get("chikitsa_sootra", ""),
+                    sources=[SummarySource(type="transcript", ref_id="ayush_vyayama_shakti", snippet="Chikitsa guidelines")],
+                    verification="patient_reported",
+                )
+            )
+
+            # Persist Ayurvedic lens into database
+            try:
+                stmt_s = select(ClinicalSummary).where(ClinicalSummary.session_id == session_id)
+                res_s = await db.execute(stmt_s)
+                existing_summary = res_s.scalar_one_or_none()
+                fields_dicts = [f.model_dump(mode="json") for f in ayush_fields]
+
+                if existing_summary:
+                    existing_summary.version += 1
+                    existing_summary.lens = "ayurvedic"
+                    existing_summary.ayush_json = ayush_lens_data
+                    existing_summary.fields_json = fields_dicts
+                    existing_summary.updated_at = datetime.now(UTC)
+                else:
+                    new_summary = ClinicalSummary(
+                        id=f"sum_{uuid.uuid4().hex[:12]}",
+                        session_id=session_id,
+                        version=1,
+                        lens="ayurvedic",
+                        chief_complaint=cc_text,
+                        fields_json=fields_dicts,
+                        ayush_json=ayush_lens_data,
+                        status="draft",
+                        created_at=datetime.now(UTC),
+                        updated_at=datetime.now(UTC),
+                    )
+                    db.add(new_summary)
+                await db.commit()
+                logger.info(f"Saved Ayurvedic lens summary for session {session_id}")
+            except Exception as err:
+                logger.error(f"Error saving Ayurvedic summary: {err}")
+
+            return ayush_fields
+
+        # ----------------------------------------------------------------------
+        # ALLOPATHIC CLINICAL SUMMARY GENERATION
+        # ----------------------------------------------------------------------
         # Prepare JSON representation for Gemini
         transcript_data = [
             {
@@ -114,6 +308,7 @@ class SummaryGenerator:
         if client and (transcript_data or entity_data):
             try:
                 raw_fields = await self._call_gemini_summary(transcript_data, entity_data)
+                logger.info(f"Generated {len(raw_fields)} summary fields via Gemini 2.0 Flash")
             except Exception as e:
                 logger.warning(f"Gemini summarization failed: {e}; generating via clinical synthesizer.")
                 raw_fields = self._synthesize_clinical_summary(transcript_data, entity_data)
@@ -123,7 +318,22 @@ class SummaryGenerator:
         # 4. Source-Tagging Validation (Post-processing)
         validated_fields = self._validate_and_tag_sources(raw_fields, transcripts, entities)
 
-        # 5. Append compact 'Changes since last visit' section
+        # 5. Insert Caregiver proxy header if session was taken by caregiver
+        if sess_row and sess_row.is_caregiver:
+            c_name = sess_row.caregiver_name or "Caregiver"
+            c_rel = f" ({sess_row.caregiver_relationship})" if sess_row.caregiver_relationship else ""
+            validated_fields.insert(
+                0,
+                SummaryField(
+                    field_id="sf_caregiver_hdr",
+                    section="chief_complaint",
+                    content=f"History provided by caregiver: {c_name}{c_rel} on behalf of patient.",
+                    sources=[SummarySource(type="transcript", ref_id="proxy_attribution", snippet=f"Proxy: {c_name}{c_rel}")],
+                    verification="patient_reported",
+                )
+            )
+
+        # 6. Append compact 'Changes since last visit' section
         try:
             from app.services.contradiction_detector import contradiction_detector
             contradictions = await contradiction_detector.detect_contradictions(session_id, db)
@@ -140,7 +350,7 @@ class SummaryGenerator:
         except Exception as e:
             logger.warning(f"Unable to append changes_since_last_visit section: {e}")
 
-        # 6. Check and Attach Emergency Red-Flag Banner if triggered
+        # 7. Check and Attach Emergency Red-Flag Banner if triggered
         try:
             stmt_rf = select(RedFlagEventModel).where(RedFlagEventModel.session_id == session_id)
             res_rf = await db.execute(stmt_rf)
@@ -166,7 +376,7 @@ class SummaryGenerator:
         except Exception as rf_err:
             logger.warning(f"Error checking red-flags for summary: {rf_err}")
 
-        # 7. Check and Attach Polypharmacy & Drug Interaction Alerts
+        # 8. Check and Attach Polypharmacy & Drug Interaction Alerts
         try:
             poly_report = await polypharmacy_detector.detect_polypharmacy(session_id, db)
             alert_lines = []
@@ -192,9 +402,8 @@ class SummaryGenerator:
         except Exception as poly_err:
             logger.warning(f"Error checking polypharmacy for summary: {poly_err}")
 
-        # 8. Persist into ClinicalSummary table
+        # 7. Persist into ClinicalSummary table
         try:
-            # Check existing summary
             stmt_s = select(ClinicalSummary).where(ClinicalSummary.session_id == session_id)
             res_s = await db.execute(stmt_s)
             existing_summary = res_s.scalar_one_or_none()
@@ -204,6 +413,7 @@ class SummaryGenerator:
 
             if existing_summary:
                 existing_summary.version += 1
+                existing_summary.lens = "allopathic"
                 existing_summary.chief_complaint = cc_field or existing_summary.chief_complaint
                 existing_summary.fields_json = fields_dicts
                 existing_summary.updated_at = datetime.now(UTC)
@@ -212,6 +422,7 @@ class SummaryGenerator:
                     id=f"sum_{uuid.uuid4().hex[:12]}",
                     session_id=session_id,
                     version=1,
+                    lens="allopathic",
                     chief_complaint=cc_field,
                     fields_json=fields_dicts,
                     status="draft",

@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/summary", tags=["Clinical Summary"])
 
 class SummaryGenerateRequest(BaseModel):
     session_id: str = Field(..., description="Active kiosk session identifier")
+    lens: str = Field("allopathic", description="Clinical summary lens: 'allopathic' or 'ayurvedic'")
 
 
 class UpdateSummaryFieldRequest(BaseModel):
@@ -37,12 +38,13 @@ async def generate_summary_endpoint(
 ):
     """
     Generate a physician-ready structured summary from interview transcript
-    and scanned document entities.
+    and scanned document entities. Supports 'allopathic' and 'ayurvedic' clinical lenses.
     """
     try:
         fields = await summary_generator.generate_summary(
             session_id=req.session_id,
             db=db,
+            lens=req.lens,
         )
         return fields
     except Exception as e:
@@ -53,12 +55,13 @@ async def generate_summary_endpoint(
 @router.get("/{session_id}", response_model=List[SummaryField])
 async def get_summary_endpoint(
     session_id: str,
+    lens: str = "allopathic",
     db: AsyncSession = Depends(get_db),
 ):
     """
-    GET /api/summary/{session_id}
-    Retrieves the existing clinical summary fields for a session.
-    Generates summary on-the-fly if not already persisted.
+    GET /api/summary/{session_id}?lens=allopathic|ayurvedic
+    Retrieves the clinical summary fields for a session under the specified lens.
+    Generates or switches lens on-the-fly if needed.
     """
     stmt = (
         select(ClinicalSummary)
@@ -68,11 +71,11 @@ async def get_summary_endpoint(
     res = await db.execute(stmt)
     summary = res.scalar_one_or_none()
 
-    if summary and summary.fields_json:
+    if summary and summary.fields_json and summary.lens == lens:
         return [SummaryField.model_validate(f) for f in summary.fields_json]
 
-    # Generate if not exists
-    return await summary_generator.generate_summary(session_id=session_id, db=db)
+    # Generate or switch lens
+    return await summary_generator.generate_summary(session_id=session_id, db=db, lens=lens)
 
 
 @router.put("/{session_id}/field/{field_id}", response_model=SummaryField)

@@ -157,7 +157,8 @@ class QuestionGenerator:
         # 3. Pain
         pain_keywords = [
             "pain", "ache", "hurt", "tender", "burning", "cramp", "sore",
-            "dard", "chhati me dard", "peeth", "sar dard", "pet dard", "dukhta"
+            "dard", "chhati me dard", "peeth", "sar dard", "pet dard", "dukhta",
+            "दर्द", "सीने में", "दुखता", "पीड़ा", "कष्ट"
         ]
         if any(kw in text_lower for kw in pain_keywords):
             return "pain"

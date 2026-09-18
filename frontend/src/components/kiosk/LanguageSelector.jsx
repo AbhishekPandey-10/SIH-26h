@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import KioskCard from './KioskCard';
 import KioskButton from './KioskButton';
-import { Volume2, CheckCircle2, ArrowRight, Languages, Globe } from 'lucide-react';
+import { Volume2, CheckCircle2, ArrowRight, Languages, Globe, Mic, Sparkles } from 'lucide-react';
+import { useSession } from '../../contexts/SessionContext';
 
 /**
  * Pan-India OPD Language Set
@@ -170,9 +171,32 @@ export const LanguageSelector = ({
   onSelectLanguage,
   className = '',
 }) => {
+  const { voiceOnlyMode, setVoiceOnlyMode, language } = useSession();
   const [currentLang, setCurrentLang] = useState(selectedLanguage || 'hi');
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [showMoreModal, setShowMoreModal] = useState(false);
+  const [showIdleSuggestion, setShowIdleSuggestion] = useState(false);
+
+  // 15-Second Inactivity Auto-Detection for Voice-Only Mode suggestion
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowIdleSuggestion(true);
+    }, 15000);
+
+    const cancelTimer = () => {
+      clearTimeout(timer);
+      setShowIdleSuggestion(false);
+    };
+
+    window.addEventListener('pointerdown', cancelTimer, { once: true });
+    window.addEventListener('keydown', cancelTimer, { once: true });
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('pointerdown', cancelTimer);
+      window.removeEventListener('keydown', cancelTimer);
+    };
+  }, []);
 
   const t = UI_TEXT[currentLang] || UI_TEXT.hi;
 
@@ -298,6 +322,103 @@ export const LanguageSelector = ({
           <Volume2 size={22} color={isPlayingAudio ? '#059669' : '#0284C7'} />
           <span>{isPlayingAudio ? t.speaking : t.hearBtn}</span>
         </button>
+      </div>
+
+      {/* TASK 1: Voice-Only Mode Large Toggle Button */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', width: '100%', maxWidth: '720px', margin: '0 auto' }}>
+        <button
+          type="button"
+          onClick={() => {
+            setVoiceOnlyMode(true);
+            handleProceed(currentLang);
+          }}
+          style={{
+            width: '100%',
+            padding: '16px 24px',
+            borderRadius: '16px',
+            background: 'linear-gradient(135deg, #1E1B4B 0%, #312E81 100%)',
+            border: '2.5px solid #818CF8',
+            color: '#FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '16px',
+            cursor: 'pointer',
+            boxShadow: '0 8px 24px rgba(49, 46, 129, 0.25)',
+            transition: 'transform 0.15s ease',
+          }}
+        >
+          <div style={{ background: '#4F46E5', borderRadius: '50%', padding: '10px', display: 'flex' }}>
+            <Mic size={26} color="#FFFFFF" />
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontSize: '18px', fontWeight: 800 }}>
+              {language === 'en' ? 'Voice-Only Mode (No touch needed)' : 'बोलकर चलाएं (Voice-Only Mode · स्पर्श की जरूरत नहीं)'}
+            </div>
+            <div style={{ fontSize: '13px', color: '#C7D2FE', marginTop: '2px' }}>
+              {language === 'en' ? 'Hands-free clinical intake via voice commands & audio prompts' : 'बिना स्क्रीन छुए पूरी प्रक्रिया बोलकर पूरी करें'}
+            </div>
+          </div>
+        </button>
+
+        {/* 15-second Inactivity Auto-Detection Suggestion Banner */}
+        {showIdleSuggestion && (
+          <div
+            style={{
+              width: '100%',
+              padding: '12px 18px',
+              borderRadius: '12px',
+              background: '#FEF3C7',
+              border: '1.5px solid #F59E0B',
+              color: '#92400E',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+            }}
+          >
+            <div style={{ fontSize: '13px', fontWeight: 700 }}>
+              💡 15 सेकंड से कोई स्पर्श नहीं: क्या आप केवल आवाज़ से संचालन (Voice-Only Mode) चाहते हैं?
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setVoiceOnlyMode(true);
+                  handleProceed(currentLang);
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  background: '#D97706',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  fontWeight: 800,
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+              >
+                हाँ, चालू करें
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowIdleSuggestion(false)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  background: '#FDE68A',
+                  color: '#78350F',
+                  border: 'none',
+                  fontWeight: 700,
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+              >
+                खारिज करें
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Grid of Languages with Fixed Uniform Height (142px) */}

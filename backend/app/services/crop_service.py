@@ -60,44 +60,45 @@ class CropService:
             img = Image.new("RGB", (600, 800), color=(245, 245, 245))
         else:
             img = Image.open(path_str)
-            img_w, img_h = img.size
 
-            # Apply 8% padding to prevent OCR boundary clipping
-            pad_x = w * padding
-            pad_y = h * padding
+        img_w, img_h = img.size
 
-            norm_x1 = max(0.0, x - pad_x)
-            norm_y1 = max(0.0, y - pad_y)
-            norm_x2 = min(1.0, x + w + pad_x)
-            norm_y2 = min(1.0, y + h + pad_y)
+        # Apply 8% padding to prevent OCR boundary clipping
+        pad_x = w * padding
+        pad_y = h * padding
 
-            px_x1 = int(norm_x1 * img_w)
-            px_y1 = int(norm_y1 * img_h)
-            px_x2 = int(norm_x2 * img_w)
-            px_y2 = int(norm_y2 * img_h)
+        norm_x1 = max(0.0, x - pad_x)
+        norm_y1 = max(0.0, y - pad_y)
+        norm_x2 = min(1.0, x + w + pad_x)
+        norm_y2 = min(1.0, y + h + pad_y)
 
-            # Safeguard minimum bounds
-            if px_x2 <= px_x1:
-                px_x2 = min(img_w, px_x1 + 10)
-            if px_y2 <= px_y1:
-                px_y2 = min(img_h, px_y1 + 10)
+        px_x1 = int(norm_x1 * img_w)
+        px_y1 = int(norm_y1 * img_h)
+        px_x2 = int(norm_x2 * img_w)
+        px_y2 = int(norm_y2 * img_h)
 
-            cropped = img.crop((px_x1, px_y1, px_x2, px_y2))
+        # Safeguard minimum bounds
+        if px_x2 <= px_x1:
+            px_x2 = min(img_w, px_x1 + 10)
+        if px_y2 <= px_y1:
+            px_y2 = min(img_h, px_y1 + 10)
 
-            # Convert to RGB if needed (e.g. RGBA PNG or palette images)
-            if cropped.mode in ("RGBA", "P", "LA"):
-                cropped = cropped.convert("RGB")
+        cropped = img.crop((px_x1, px_y1, px_x2, px_y2))
 
-            buf = io.BytesIO()
-            cropped.save(buf, format="JPEG", quality=90)
-            jpeg_bytes = buf.getvalue()
+        # Convert to RGB if needed (e.g. RGBA PNG or palette images)
+        if cropped.mode in ("RGBA", "P", "LA"):
+            cropped = cropped.convert("RGB")
 
-            # Maintain LRU cache size
-            if len(self._cache) >= self.max_cache_size:
-                self._cache.pop(next(iter(self._cache)))
+        buf = io.BytesIO()
+        cropped.save(buf, format="JPEG", quality=90)
+        jpeg_bytes = buf.getvalue()
 
-            self._cache[cache_key] = jpeg_bytes
-            return jpeg_bytes
+        # Maintain LRU cache size
+        if len(self._cache) >= self.max_cache_size:
+            self._cache.pop(next(iter(self._cache)))
+
+        self._cache[cache_key] = jpeg_bytes
+        return jpeg_bytes
 
 
 crop_service = CropService()

@@ -243,6 +243,12 @@ export const IdentityScreen = ({ onBack }) => {
     error,
     setError,
     isStaffMode,
+    isCaregiver,
+    setIsCaregiver,
+    caregiverDetails,
+    setCaregiverDetails,
+    voiceOnlyMode,
+    setVoiceOnlyMode,
   } = useSession();
 
   const t = IDENTITY_TEXT[language] || IDENTITY_TEXT.hi;
@@ -473,6 +479,147 @@ export const IdentityScreen = ({ onBack }) => {
         <div>
           <strong>{t.consentNoticeTitle}</strong> {t.consentNoticeDesc}
         </div>
+      </div>
+
+      {/* TASK 2: Caregiver / Proxy Mode Selection */}
+      <div
+        style={{
+          background: isCaregiver ? '#FFFBEB' : '#FFFFFF',
+          border: `2px solid ${isCaregiver ? '#F59E0B' : '#E2E8F0'}`,
+          borderRadius: '16px',
+          padding: '16px 20px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.03)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A' }}>
+              {language === 'en'
+                ? 'Are you filling this out for yourself or on behalf of the patient?'
+                : 'क्या आप स्वयं के लिए भर रहे हैं या मरीज की ओर से (देखभालकर्ता / परिजन)?'}
+            </div>
+            <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
+              {language === 'en'
+                ? 'Select "On behalf of patient" if you are an attending caregiver, parent, or family member.'
+                : 'यदि आप मरीज के अभिभावक, माता-पिता या परिजन हैं तो "देखभालकर्ता" चुनें।'}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setIsCaregiver(false)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '10px',
+                border: `2px solid ${!isCaregiver ? '#059669' : '#CBD5E1'}`,
+                background: !isCaregiver ? '#ECFDF5' : '#FFFFFF',
+                color: !isCaregiver ? '#065F46' : '#475569',
+                fontWeight: 700,
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+            >
+              👤 {language === 'en' ? 'For Myself' : 'स्वयं के लिए'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsCaregiver(true)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '10px',
+                border: `2px solid ${isCaregiver ? '#D97706' : '#CBD5E1'}`,
+                background: isCaregiver ? '#FEF3C7' : '#FFFFFF',
+                color: isCaregiver ? '#92400E' : '#475569',
+                fontWeight: 800,
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+            >
+              🤝 {language === 'en' ? 'On Behalf of Patient (Caregiver)' : 'मरीज की ओर से (देखभालकर्ता)'}
+            </button>
+          </div>
+        </div>
+
+        {isCaregiver && (
+          <div
+            style={{
+              marginTop: '16px',
+              paddingTop: '14px',
+              borderTop: '1px dashed #FCD34D',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '14px',
+            }}
+          >
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>
+                {language === 'en' ? 'Caregiver Full Name *' : 'देखभालकर्ता का पूरा नाम *'}
+              </label>
+              <input
+                type="text"
+                value={caregiverDetails.name}
+                onChange={(e) => setCaregiverDetails((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder={language === 'en' ? 'e.g. Ramesh Sharma' : 'उदा. रमेश शर्मा'}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1.5px solid #F59E0B',
+                  fontSize: '14px',
+                  outline: 'none',
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>
+                {language === 'en' ? 'Relationship to Patient *' : 'मरीज से संबंध *'}
+              </label>
+              <select
+                value={caregiverDetails.relationship}
+                onChange={(e) => setCaregiverDetails((prev) => ({ ...prev, relationship: e.target.value }))}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1.5px solid #F59E0B',
+                  fontSize: '14px',
+                  outline: 'none',
+                  background: '#FFFFFF',
+                }}
+              >
+                <option value="Son / Daughter">{language === 'en' ? 'Son / Daughter' : 'बेटा / बेटी'}</option>
+                <option value="Spouse">{language === 'en' ? 'Spouse (Husband/Wife)' : 'पति / पत्नी'}</option>
+                <option value="Parent">{language === 'en' ? 'Parent (Father/Mother)' : 'माता / पिता'}</option>
+                <option value="Sibling">{language === 'en' ? 'Brother / Sister' : 'भाई / बहन'}</option>
+                <option value="Caregiver / Other">{language === 'en' ? 'Other Caregiver / Attendant' : 'अन्य देखभालकर्ता'}</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#78350F', marginBottom: '4px' }}>
+                {language === 'en' ? 'Caregiver Mobile Number' : 'देखभालकर्ता मोबाइल नंबर'}
+              </label>
+              <input
+                type="tel"
+                value={caregiverDetails.phone}
+                onChange={(e) => setCaregiverDetails((prev) => ({ ...prev, phone: e.target.value }))}
+                placeholder="10-digit mobile"
+                maxLength={10}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1.5px solid #F59E0B',
+                  fontSize: '14px',
+                  outline: 'none',
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Reordered Tabs by Speed & Least Friction (QR First -> Aadhaar -> ABHA -> Manual) */}

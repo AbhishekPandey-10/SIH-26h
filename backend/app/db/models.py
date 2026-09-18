@@ -67,6 +67,13 @@ class Session(Base):
     language: Mapped[str] = mapped_column(String(8), default="hi", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)  # active, completed, wiped
     is_caregiver: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    caregiver_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    caregiver_relationship: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    caregiver_phone: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    voice_only_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    body_map_selections: Mapped[List[str] | None] = mapped_column(JSON, nullable=True)
+    interview_mode: Mapped[str] = mapped_column(String(32), default="allopathic", nullable=False)
+    prakriti_result: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -189,6 +196,9 @@ class InterviewTranscript(Base):
     audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     language: Mapped[str] = mapped_column(String(10), default="hi", nullable=False)
     node_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_proxy: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    proxy_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    proxy_relationship: Mapped[str | None] = mapped_column(String(64), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -209,6 +219,7 @@ class ClinicalSummary(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    lens: Mapped[str] = mapped_column(String(32), default="allopathic", nullable=False)  # allopathic, ayurvedic
     chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
     hpi_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     pmh_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -217,6 +228,7 @@ class ClinicalSummary(Base):
     family_personal_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     ros_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     fields_json: Mapped[List[Dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    ayush_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
     doctor_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

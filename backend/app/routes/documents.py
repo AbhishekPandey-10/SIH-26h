@@ -295,9 +295,18 @@ async def get_document_file_endpoint(
     if sample_img.exists():
         return FileResponse(sample_img)
 
-    test_img = Path("tests/test_data/sample_doc.jpg")
+    test_img = Path(settings.DATA_DIR).parent / "tests" / "test_data" / "sample_doc.jpg"
     if test_img.exists():
         return FileResponse(test_img)
+
+    # If doc exists in DB or is requested, return placeholder image bytes
+    if doc:
+        import io
+        from PIL import Image
+        img = Image.new("RGB", (800, 1000), color=(250, 250, 250))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        return Response(content=buf.getvalue(), media_type="image/jpeg")
 
     raise HTTPException(status_code=404, detail="Document image file not found")
 

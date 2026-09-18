@@ -115,7 +115,7 @@ const CONSENT_TEXTS = {
 };
 
 export const ConsentFlow = ({ onBack }) => {
-  const { language, submitConsent, isLoading, error, patient } = useSession();
+  const { language, submitConsent, isLoading, error, patient, isCaregiver, caregiverDetails, voiceOnlyMode } = useSession();
   const [step, setStep] = useState(1);
 
   // Default toggles: toggle 1 is ON, toggles 2 & 3 are OFF
@@ -271,6 +271,37 @@ export const ConsentFlow = ({ onBack }) => {
           }}
         >
           ⚠️ {error}
+        </div>
+      )}
+
+      {/* TASK 2: Caregiver Proxy Consent Affirmation Banner */}
+      {isCaregiver && (
+        <div
+          style={{
+            padding: '16px 20px',
+            borderRadius: '14px',
+            background: '#FFFBEB',
+            border: '2px solid #F59E0B',
+            color: '#92400E',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '14px',
+            boxShadow: '0 2px 8px rgba(245, 158, 11, 0.1)',
+          }}
+        >
+          <div style={{ fontSize: '24px' }}>🤝</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: '15px' }}>
+              {language === 'en'
+                ? `Authorized Caregiver Consent: ${caregiverDetails.name || 'Caregiver'} (${caregiverDetails.relationship})`
+                : `अधिकृत देखभालकर्ता सहमति: ${caregiverDetails.name || 'देखभालकर्ता'} (${caregiverDetails.relationship})`}
+            </div>
+            <div style={{ fontSize: '13px', marginTop: '3px', lineHeight: '1.4' }}>
+              {language === 'en'
+                ? `I confirm I am authorized to share health information and grant consent on behalf of patient ${patient?.name || 'the patient'}.`
+                : `मैं पुष्टि करता/करती हूँ कि मैं मरीज ${patient?.name || 'मरीज'} की ओर से स्वास्थ्य जानकारी साझा करने और सहमति देने हेतु अधिकृत हूँ।`}
+            </div>
+          </div>
         </div>
       )}
 

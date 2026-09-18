@@ -41,6 +41,12 @@ class SessionStartRequest(BaseModel):
     patient_name: str | None = None
     language: str = "hi"
     is_caregiver: bool = False
+    caregiver_name: str | None = None
+    caregiver_relationship: str | None = None
+    caregiver_phone: str | None = None
+    voice_only_mode: bool = False
+    body_map_selections: List[str] | None = None
+    interview_mode: str = "allopathic"
 
 
 class SessionStartResponse(BaseModel):
@@ -49,6 +55,20 @@ class SessionStartResponse(BaseModel):
     language: str
     abha_id: str | None = None
     status: str = "active"
+    is_caregiver: bool = False
+    caregiver_name: str | None = None
+    voice_only_mode: bool = False
+    interview_mode: str = "allopathic"
+
+
+class SessionConfigureRequest(BaseModel):
+    body_map_selections: List[str] | None = None
+    interview_mode: str | None = None
+    voice_only_mode: bool | None = None
+    is_caregiver: bool | None = None
+    caregiver_name: str | None = None
+    caregiver_relationship: str | None = None
+    caregiver_phone: str | None = None
 
 
 class VerifyAbhaRequest(BaseModel):
@@ -135,10 +155,26 @@ async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get
         language=req.language,
         status="active",
         is_caregiver=req.is_caregiver,
+        caregiver_name=req.caregiver_name,
+        caregiver_relationship=req.caregiver_relationship,
+        caregiver_phone=req.caregiver_phone,
+        voice_only_mode=req.voice_only_mode,
+        body_map_selections=req.body_map_selections,
+        interview_mode=req.interview_mode,
         started_at=datetime.now(UTC),
     )
     db.add(new_session)
     await db.commit()
+
+    # Pre-configure interview engine if body map or mode provided
+    try:
+        from app.services.interview_engine import interview_engine
+        if req.body_map_selections:
+            interview_engine.set_body_map(session_uuid, req.body_map_selections)
+        if req.interview_mode:
+            interview_engine.set_interview_mode(session_uuid, req.interview_mode)
+    except Exception as e:
+        logger.debug(f"Interview engine preconfig warning: {e}")
 
     # Store in fast in-memory cache
     _IN_MEMORY_SESSION_CACHE[session_uuid] = {
@@ -155,7 +191,56 @@ async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get
         language=req.language,
         abha_id=req.abha_id,
         status="active",
+        is_caregiver=req.is_caregiver,
+        caregiver_name=req.caregiver_name,
+        voice_only_mode=req.voice_only_mode,
+        interview_mode=req.interview_mode,
     )
+
+
+@router.post("/{session_id}/configure")
+async def configure_session(
+    session_id: str,
+    req: SessionConfigureRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Configure session attributes (body map selections, interview mode, caregiver info, voice-only mode).
+    """
+    stmt = select(Session).where(Session.id == session_id)
+    res = await db.execute(stmt)
+    sess_row = res.scalar_one_or_none()
+    if not sess_row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if req.body_map_selections is not None:
+        sess_row.body_map_selections = req.body_map_selections
+    if req.interview_mode is not None:
+        sess_row.interview_mode = req.interview_mode
+    if req.voice_only_mode is not None:
+        sess_row.voice_only_mode = req.voice_only_mode
+    if req.is_caregiver is not None:
+        sess_row.is_caregiver = req.is_caregiver
+    if req.caregiver_name is not None:
+        sess_row.caregiver_name = req.caregiver_name
+    if req.caregiver_relationship is not None:
+        sess_row.caregiver_relationship = req.caregiver_relationship
+    if req.caregiver_phone is not None:
+        sess_row.caregiver_phone = req.caregiver_phone
+
+    await db.commit()
+
+    # Sync with interview engine in memory
+    try:
+        from app.services.interview_engine import interview_engine
+        if req.body_map_selections is not None:
+            interview_engine.set_body_map(session_id, req.body_map_selections)
+        if req.interview_mode is not None:
+            interview_engine.set_interview_mode(session_id, req.interview_mode)
+    except Exception as e:
+        logger.debug(f"Interview engine configure sync error: {e}")
+
+    return {"status": "configured", "session_id": session_id}
 
 
 @router.post("/verify-abha", response_model=PatientDemographics)

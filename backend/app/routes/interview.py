@@ -154,11 +154,38 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
 
     logger.info(f"WebSocket client connected to /ws/interview (session: {active_session_id})")
 
+    # Load session metadata (caregiver mode, body map, interview mode)
+    sess_is_caregiver = False
+    sess_caregiver_name = None
+    sess_caregiver_rel = None
+    sess_body_map = []
+    sess_interview_mode = "allopathic"
+
+    try:
+        async with async_session_factory() as db:
+            stmt = select(Session).where(Session.id == active_session_id)
+            res = await db.execute(stmt)
+            s_row = res.scalar_one_or_none()
+            if s_row:
+                sess_is_caregiver = s_row.is_caregiver
+                sess_caregiver_name = s_row.caregiver_name
+                sess_caregiver_rel = s_row.caregiver_relationship
+                sess_body_map = s_row.body_map_selections or []
+                sess_interview_mode = s_row.interview_mode or "allopathic"
+                active_language = s_row.language or active_language
+    except Exception as err:
+        logger.warning(f"Error loading session row {active_session_id}: {err}")
+
     try:
         # 1. Send the first question (chief complaint) upon connection
         first_question: NextQuestion = interview_engine.start_interview(
             session_id=active_session_id,
-            language=active_language
+            language=active_language,
+            body_map_selections=sess_body_map,
+            interview_mode=sess_interview_mode,
+            is_caregiver=sess_is_caregiver,
+            caregiver_name=sess_caregiver_name,
+            caregiver_relationship=sess_caregiver_rel,
         )
         await websocket.send_text(first_question.model_dump_json())
 
@@ -171,6 +198,12 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
             # Parse incoming payload
             answer_text = ""
             verbatim_voice = None
+            msg_body_map = None
+            msg_interview_mode = None
+            msg_is_proxy = sess_is_caregiver
+            msg_proxy_name = sess_caregiver_name
+            msg_proxy_rel = sess_caregiver_rel
+
             try:
                 payload = json.loads(data)
                 if isinstance(payload, dict):
@@ -183,12 +216,29 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                     verbatim_voice = payload.get("verbatim_voice")
                     active_session_id = payload.get("session_id", active_session_id)
                     active_language = payload.get("language", active_language)
+                    msg_body_map = payload.get("body_map_selections")
+                    msg_interview_mode = payload.get("interview_mode")
+                    if "is_proxy" in payload or "is_caregiver" in payload:
+                        msg_is_proxy = bool(payload.get("is_proxy", payload.get("is_caregiver", False)))
+                    if payload.get("caregiver_name") or payload.get("proxy_name"):
+                        msg_proxy_name = payload.get("caregiver_name") or payload.get("proxy_name")
+                    if payload.get("caregiver_relationship") or payload.get("proxy_relationship"):
+                        msg_proxy_rel = payload.get("caregiver_relationship") or payload.get("proxy_relationship")
                 else:
                     answer_text = str(payload)
             except json.JSONDecodeError:
                 answer_text = data.strip()
 
             current_state = interview_engine.get_or_create_session(active_session_id)
+            if msg_body_map is not None:
+                current_state["body_map_selections"] = msg_body_map
+            if msg_interview_mode is not None:
+                current_state["interview_mode"] = msg_interview_mode
+            if msg_is_proxy:
+                current_state["is_caregiver"] = True
+                current_state["caregiver_name"] = msg_proxy_name
+                current_state["caregiver_relationship"] = msg_proxy_rel
+
             prior_question = current_state.get("next_question")
 
             # Check for safety red-flags with Gemini confirmation
@@ -249,9 +299,27 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                                 timestamp=red_flag.timestamp,
                             )
                         )
+                        # Also record turn in InterviewTranscript
+                        turn_num = len(current_state.get("answers", [])) + 1
+                        tr_entry = InterviewTranscript(
+                            session_id=active_session_id,
+                            turn_number=turn_num,
+                            question_id=prior_question.question_id if prior_question else "emergency_trigger",
+                            question_text=prior_question.text if prior_question else "",
+                            answer_text=answer_text,
+                            verbatim_voice=verbatim_voice,
+                            language=active_language,
+                            node_name="emergency_hold",
+                            speaker="caregiver" if msg_is_proxy else "patient",
+                            text=answer_text,
+                            is_proxy=msg_is_proxy,
+                            proxy_name=msg_proxy_name,
+                            proxy_relationship=msg_proxy_rel,
+                        )
+                        db.add(tr_entry)
                         await db.commit()
                 except Exception as db_err:
-                    logger.error(f"Error persisting red-flag event: {db_err}")
+                    logger.error(f"Error persisting red-flag event/transcript: {db_err}")
 
                 try:
                     from app.routes.red_flag import staff_alert_manager
@@ -310,8 +378,11 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                     verbatim_voice=verbatim_voice,
                     language=active_language,
                     node_name=current_state.get("current_node", ""),
-                    speaker="patient",
+                    speaker="caregiver" if msg_is_proxy else "patient",
                     text=answer_text,
+                    is_proxy=msg_is_proxy,
+                    proxy_name=msg_proxy_name,
+                    proxy_relationship=msg_proxy_rel,
                 )
                 async with async_session_factory() as db:
                     db.add(transcript_entry)

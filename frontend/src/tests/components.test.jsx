@@ -116,6 +116,31 @@ describe('Design System Constants and Configurations', () => {
     expect(Timeline).toBeDefined();
     expect(LabSparkline).toBeDefined();
   });
+
+  it('exports all Phase 5 Dev 1 & Dev 2 components and utilities', async () => {
+    const { default: BodyMap, BODY_REGIONS_FRONT, BODY_REGIONS_BACK } = await import('../components/kiosk/BodyMap');
+    const { default: AyushInterview } = await import('../components/interview/AyushInterview');
+    const { default: OfflineIndicator } = await import('../components/common/OfflineIndicator');
+    const { classifyVoiceIntent } = await import('../services/voiceNavigation');
+    const { offlineQueue } = await import('../services/offlineQueue');
+
+    expect(BodyMap).toBeDefined();
+    expect(BODY_REGIONS_FRONT.length).toBeGreaterThan(5);
+    expect(BODY_REGIONS_BACK.length).toBeGreaterThan(5);
+    expect(AyushInterview).toBeDefined();
+    expect(OfflineIndicator).toBeDefined();
+
+    // Voice navigation intent classifier
+    expect(classifyVoiceIntent('haan')).toBe('CONFIRM');
+    expect(classifyVoiceIntent('yes please')).toBe('CONFIRM');
+    expect(classifyVoiceIntent('aage badho')).toBe('NEXT');
+    expect(classifyVoiceIntent('piche')).toBe('BACK');
+    expect(classifyVoiceIntent('nahi')).toBe('DENY');
+
+    // Offline queue instance
+    expect(offlineQueue).toBeDefined();
+    expect(typeof offlineQueue.enqueue).toBe('function');
+  });
 });
 
 

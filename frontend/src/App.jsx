@@ -11,6 +11,10 @@ import DoctorDashboard from './pages/DoctorDashboard';
 import DocumentWorkflow from './components/documents/DocumentWorkflow';
 import useIdleTimeout from './hooks/useIdleTimeout';
 import KioskButton from './components/kiosk/KioskButton';
+import OfflineIndicator from './components/common/OfflineIndicator';
+import BodyMap from './components/kiosk/BodyMap';
+import AyushInterview from './components/interview/AyushInterview';
+import { registerSpacebarFallback } from './services/voiceNavigation';
 import {
   Maximize,
   Minimize,
@@ -45,6 +49,9 @@ function KioskApp() {
     setIsHighContrast,
     isStaffMode,
     setIsStaffMode,
+    voiceOnlyMode,
+    bodyMapSelections,
+    setBodyMapSelections,
   } = useSession();
 
   const [viewMode, setViewMode] = useState('kiosk'); // 'kiosk' | 'showcase'
@@ -53,6 +60,16 @@ function KioskApp() {
   const [timeStr, setTimeStr] = useState(() =>
     new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   );
+
+  // TASK 1: Voice-Only Mode Physical Spacebar Fallback
+  useEffect(() => {
+    if (voiceOnlyMode) {
+      const unregister = registerSpacebarFallback(() => {
+        console.log('[MediKiosk] Spacebar physical fallback confirm executed');
+      });
+      return unregister;
+    }
+  }, [voiceOnlyMode]);
 
   // Update clock every 10s
   useEffect(() => {
@@ -109,6 +126,9 @@ function KioskApp() {
         position: 'relative',
       }}
     >
+      {/* PHASE 5: Sticky Offline Indicator Banner */}
+      <OfflineIndicator />
+
       {/* Top Kiosk System Bar */}
       <header
         style={{
@@ -408,7 +428,60 @@ function KioskApp() {
               <KioskDashboard
                 onStartInterview={() => setFlowStep('interview')}
                 onScanDocuments={() => setFlowStep('scan')}
+                onOpenBodyMap={() => setFlowStep('bodymap')}
+                onStartAyush={() => setFlowStep('ayush')}
               />
+            )}
+
+            {flowStep === 'bodymap' && (
+              <div style={{ flex: 1, padding: '24px 20px', maxWidth: '840px', margin: '0 auto', width: '100%' }}>
+                <div style={{ marginBottom: '16px' }}>
+                  <KioskButton
+                    variant="secondary"
+                    size="sm"
+                    icon={<ArrowLeft size={18} />}
+                    onClick={() => setFlowStep('active')}
+                  >
+                    {language === 'en' ? '← Back to Dashboard' : '← डैशबोर्ड पर वापस जाएं'}
+                  </KioskButton>
+                </div>
+                <BodyMap
+                  language={language || 'hi'}
+                  initialSelected={bodyMapSelections || []}
+                  onConfirm={(regions) => {
+                    setBodyMapSelections(regions);
+                    if (session?.session_id) {
+                      fetch(`/api/session/${session.session_id}/configure`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ body_map_selections: regions }),
+                      }).catch(() => {});
+                    }
+                    setFlowStep('interview');
+                  }}
+                  onSkip={() => setFlowStep('interview')}
+                />
+              </div>
+            )}
+
+            {flowStep === 'ayush' && (
+              <div style={{ flex: 1, padding: '24px 20px', maxWidth: '960px', margin: '0 auto', width: '100%' }}>
+                <div style={{ marginBottom: '16px' }}>
+                  <KioskButton
+                    variant="secondary"
+                    size="sm"
+                    icon={<ArrowLeft size={18} />}
+                    onClick={() => setFlowStep('active')}
+                  >
+                    {language === 'en' ? '← Back to Dashboard' : '← डैशबोर्ड पर वापस जाएं'}
+                  </KioskButton>
+                </div>
+                <AyushInterview
+                  sessionId={session?.session_id || 'dev-test-001'}
+                  language={language || 'hi'}
+                  onComplete={() => setFlowStep('active')}
+                />
+              </div>
             )}
 
             {flowStep === 'scan' && (

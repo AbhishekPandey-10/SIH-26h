@@ -16,6 +16,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.services.ayush_service import DASHHAVIDHA_STAGES
 from app.services.question_generator import question_generator
 from app.shared.schemas import NextQuestion
 
@@ -41,6 +42,16 @@ class InterviewState(TypedDict, total=False):
     last_answer: str | None
     next_question: NextQuestion | None
     is_complete: bool
+
+    # Phase 5: Body Map, AYUSH Dashavidha Pariksha, and Caregiver Mode
+    body_map_selections: list[str] | None
+    interview_mode: str  # "allopathic" | "ayush"
+    ayush_stage_index: int
+    ayush_answers: dict[str, Any]
+    prakriti_result: dict[str, Any] | None
+    is_caregiver: bool
+    caregiver_name: str | None
+    caregiver_relationship: str | None
 
 
 PAIN_AXES = [
@@ -70,6 +81,8 @@ def node_intake(state: InterviewState) -> InterviewState:
         "extracted_context": state.get("extracted_context", []),
         "red_flags_triggered": state.get("red_flags_triggered", []),
         "socrates_axis_index": 0,
+        "ayush_stage_index": 0,
+        "ayush_answers": state.get("ayush_answers", {}),
     }
 
 
@@ -112,8 +125,10 @@ def node_categorize_complaint(state: InterviewState) -> InterviewState:
     }
 
 
-def route_complaint(state: InterviewState) -> Literal["socrates_pain", "socrates_general", "psych_screening", "obgyn_history"]:
-    """Conditional router based on categorized chief complaint."""
+def route_complaint(state: InterviewState) -> Literal["ayush_pariksha", "socrates_pain", "socrates_general", "psych_screening", "obgyn_history"]:
+    """Conditional router based on interview mode and categorized chief complaint."""
+    if state.get("interview_mode") == "ayush":
+        return "ayush_pariksha"
     cat = state.get("chief_complaint_category", "general")
     if cat == "pain":
         return "socrates_pain"
@@ -126,12 +141,30 @@ def route_complaint(state: InterviewState) -> Literal["socrates_pain", "socrates
 
 
 def node_socrates_pain(state: InterviewState) -> InterviewState:
-    """SOCRATES pain framework questions."""
+    """SOCRATES pain framework questions with 2D Body Map site-skip."""
     idx = state.get("socrates_axis_index", 0)
+    body_map = state.get("body_map_selections") or []
+    answers = list(state.get("answers", []))
+
+    # Body-map context reaches LangGraph and skips SOCRATES "site" question
+    if idx == 0 and body_map:
+        site_str = ", ".join(body_map)
+        logger.info(f"Skipping SOCRATES site axis using 2D Body Map selections: {site_str}")
+        answers.append({
+            "node": "socrates_pain",
+            "question_id": "soc_pain_site",
+            "question_text": "शरीर में दर्द का स्थान (2D Body Map)",
+            "answer_text": site_str,
+            "verbatim_voice": None,
+            "language": state.get("language", "hi"),
+        })
+        state["answers"] = answers
+        idx = 1
+        state["socrates_axis_index"] = 1
+
     axis = PAIN_AXES[min(idx, len(PAIN_AXES) - 1)]
     lang = state.get("language", "hi")
     cc = state.get("chief_complaint", "")
-    answers = state.get("answers", [])
 
     q_data = question_generator.generate_question(
         current_section="socrates_pain",
@@ -140,6 +173,11 @@ def node_socrates_pain(state: InterviewState) -> InterviewState:
         language=lang,
         socrates_axis=axis,
     )
+    meta = dict(q_data.get("metadata") or {})
+    meta["category"] = "socrates_pain"
+    if body_map:
+        meta["body_map_skipped_site"] = True
+        meta["body_map_selections"] = body_map
 
     nq = NextQuestion(
         question_id=q_data.get("question_id", f"soc_pain_{axis}"),
@@ -148,7 +186,7 @@ def node_socrates_pain(state: InterviewState) -> InterviewState:
         options=q_data.get("options"),
         section="socrates",
         progress_pct=25.0 + min(idx * 2.0, 15.0),
-        metadata=q_data.get("metadata"),
+        metadata=meta,
     )
     asked = list(state.get("asked_questions", []))
     asked.append(nq.model_dump())
@@ -156,6 +194,46 @@ def node_socrates_pain(state: InterviewState) -> InterviewState:
         "current_node": "socrates_pain",
         "next_question": nq,
         "asked_questions": asked,
+        "socrates_axis_index": idx,
+        "answers": answers,
+    }
+
+
+def node_ayush_pariksha(state: InterviewState) -> InterviewState:
+    """Dashavidha Pariksha 10-stage classical Ayurvedic diagnostic interview."""
+    idx = state.get("ayush_stage_index", 0)
+    stage = DASHHAVIDHA_STAGES[min(idx, len(DASHHAVIDHA_STAGES) - 1)]
+    lang = state.get("language", "hi")
+    is_hi = (lang == "hi")
+
+    text = stage["question_hi"] if is_hi else stage["question_en"]
+    options = [
+        opt["label_hi"] if is_hi else opt["label_en"]
+        for opt in stage.get("options", [])
+    ]
+
+    nq = NextQuestion(
+        question_id=f"ayush_{stage['id']}",
+        text=f"[{stage['name']}] {text}",
+        input_type="choice",
+        options=options,
+        section="ayush_pariksha",
+        progress_pct=10.0 + (idx + 1) * 8.5,
+        metadata={
+            "stage_id": stage["id"],
+            "stage_name": stage["name"],
+            "stage_index": idx,
+            "total_stages": len(DASHHAVIDHA_STAGES),
+            "category": "ayush_pariksha",
+        }
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {
+        "current_node": "ayush_pariksha",
+        "next_question": nq,
+        "asked_questions": asked,
+        "ayush_stage_index": idx,
     }
 
 
@@ -599,13 +677,14 @@ def node_complete(state: InterviewState) -> InterviewState:
 
 def build_interview_graph() -> Any:
     """
-    Builds the full LangGraph state machine with adaptive SOCRATES routing.
+    Builds the full LangGraph state machine with adaptive SOCRATES routing and AYUSH Pariksha.
     """
     builder = StateGraph(InterviewState)
 
     builder.add_node("intake", node_intake)
     builder.add_node("chief_complaint", node_chief_complaint)
     builder.add_node("categorize_complaint", node_categorize_complaint)
+    builder.add_node("ayush_pariksha", node_ayush_pariksha)
     builder.add_node("socrates_pain", node_socrates_pain)
     builder.add_node("socrates_general", node_socrates_general)
     builder.add_node("psych_screening", node_psych_screening)
@@ -628,6 +707,7 @@ def build_interview_graph() -> Any:
         "categorize_complaint",
         route_complaint,
         {
+            "ayush_pariksha": "ayush_pariksha",
             "socrates_pain": "socrates_pain",
             "socrates_general": "socrates_general",
             "psych_screening": "psych_screening",
@@ -635,7 +715,10 @@ def build_interview_graph() -> Any:
         }
     )
 
-    # All branches flow to PMH
+    # AYUSH flow leads directly to completion once 10 stages conclude
+    builder.add_edge("ayush_pariksha", "complete")
+
+    # All allopathic branches flow to PMH
     builder.add_edge("socrates_pain", "pmh")
     builder.add_edge("socrates_general", "pmh")
     builder.add_edge("psych_screening", "pmh")
@@ -657,6 +740,7 @@ NODE_HANDLERS = {
     "intake": node_intake,
     "chief_complaint": node_chief_complaint,
     "categorize_complaint": node_categorize_complaint,
+    "ayush_pariksha": node_ayush_pariksha,
     "socrates_pain": node_socrates_pain,
     "socrates_general": node_socrates_general,
     "psych_screening": node_psych_screening,
@@ -703,21 +787,55 @@ class InterviewEngine:
                 "last_answer": None,
                 "next_question": None,
                 "is_complete": False,
+                "body_map_selections": [],
+                "interview_mode": "allopathic",
+                "ayush_stage_index": 0,
+                "ayush_answers": {},
+                "prakriti_result": None,
+                "is_caregiver": False,
+                "caregiver_name": None,
+                "caregiver_relationship": None,
             }
         elif extracted_context:
             self.sessions[session_id]["extracted_context"] = extracted_context
         return self.sessions[session_id]
+
+    def set_body_map(self, session_id: str, selections: list[str]) -> None:
+        """Sets body map anatomical selections and injects into LangGraph state."""
+        state = self.get_or_create_session(session_id)
+        state["body_map_selections"] = selections
+        logger.info(f"Session {session_id}: Injected body map selections: {selections}")
+
+    def set_interview_mode(self, session_id: str, mode: str) -> None:
+        """Sets interview mode ('allopathic' or 'ayush')."""
+        state = self.get_or_create_session(session_id)
+        state["interview_mode"] = mode
+        logger.info(f"Session {session_id}: Set interview mode to: {mode}")
 
     def start_interview(
         self,
         session_id: str = "dev-test-001",
         language: str = "hi",
         extracted_context: list[dict[str, Any]] | None = None,
+        body_map_selections: list[str] | None = None,
+        interview_mode: str = "allopathic",
+        is_caregiver: bool = False,
+        caregiver_name: str | None = None,
+        caregiver_relationship: str | None = None,
     ) -> NextQuestion:
         state = self.get_or_create_session(session_id, language, extracted_context)
         state["language"] = language
         if extracted_context is not None:
             state["extracted_context"] = extracted_context
+        if body_map_selections is not None:
+            state["body_map_selections"] = body_map_selections
+        if interview_mode:
+            state["interview_mode"] = interview_mode
+        if is_caregiver:
+            state["is_caregiver"] = True
+            state["caregiver_name"] = caregiver_name
+            state["caregiver_relationship"] = caregiver_relationship
+
         # Run through intake and prompt for chief_complaint
         state.update(node_intake(state))
         cc_result = node_chief_complaint(state)
@@ -725,7 +843,6 @@ class InterviewEngine:
         nq = state.get("next_question")
         assert nq is not None
         return nq
-
 
     def step(
         self,
@@ -780,7 +897,6 @@ class InterviewEngine:
         })
         state["answers"] = answers
 
-
         # State transitions
         if curr_node == "chief_complaint":
             state["chief_complaint"] = answer_text
@@ -791,6 +907,26 @@ class InterviewEngine:
             handler = NODE_HANDLERS[next_node_name]
             result = handler(state)
             state.update(result)
+
+        elif curr_node == "ayush_pariksha":
+            ayush_answers = dict(state.get("ayush_answers", {}))
+            idx = state.get("ayush_stage_index", 0)
+            stage = DASHHAVIDHA_STAGES[min(idx, len(DASHHAVIDHA_STAGES) - 1)]
+            ayush_answers[stage["id"]] = answer_text
+            state["ayush_answers"] = ayush_answers
+
+            if idx < len(DASHHAVIDHA_STAGES) - 1:
+                state["ayush_stage_index"] = idx + 1
+                state["current_node"] = "ayush_pariksha"
+                result = node_ayush_pariksha(state)
+                state.update(result)
+            else:
+                from app.services.ayush_service import evaluate_prakriti_and_dosha
+                prakriti_res = evaluate_prakriti_and_dosha(ayush_answers)
+                state["prakriti_result"] = prakriti_res
+                state["current_node"] = "complete"
+                result = node_complete(state)
+                state.update(result)
 
         elif curr_node in ["socrates_pain", "socrates_general", "psych_screening", "obgyn_history"]:
             # Advance to PMH

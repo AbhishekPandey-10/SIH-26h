@@ -16,6 +16,8 @@ import {
   CheckCircle2,
   HelpCircle,
   Stethoscope,
+  MapPin,
+  Compass,
 } from 'lucide-react';
 
 const DASHBOARD_TEXT = {
@@ -114,7 +116,12 @@ const DASHBOARD_TEXT = {
   },
 };
 
-export const KioskDashboard = ({ onStartInterview, onScanDocuments }) => {
+export const KioskDashboard = ({
+  onStartInterview,
+  onScanDocuments,
+  onOpenBodyMap,
+  onStartAyush,
+}) => {
   const { session, patient, language, endSession } = useSession();
   const [showInterview, setShowInterview] = useState(false);
   const t = DASHBOARD_TEXT[language] || DASHBOARD_TEXT.hi;
@@ -450,6 +457,154 @@ export const KioskDashboard = ({ onStartInterview, onScanDocuments }) => {
               sublabel={t.service2Sub}
             >
               {t.service2Btn}
+            </KioskButton>
+          </div>
+        </KioskCard>
+
+        {/* Service 3: Interactive 2D Body Map (Phase 5 Dev 2) */}
+        <KioskCard
+          padding="32px"
+          onClick={onOpenBodyMap}
+          style={{
+            border: '2.5px solid #CBD5E1',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            background: '#FFFFFF',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+          className="kiosk-card interactive"
+        >
+          <div>
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '16px',
+                background: '#FEF3C7',
+                color: '#D97706',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: '18px',
+              }}
+            >
+              <MapPin size={36} />
+            </div>
+
+            <div
+              style={{
+                display: 'inline-block',
+                fontSize: '12px',
+                fontWeight: 800,
+                color: '#D97706',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                marginBottom: '6px',
+              }}
+            >
+              {language === 'en' ? 'Phase 5 · Interactive 2D Body Map' : 'कदम 5 · दर्द का 2D बॉडी मैप'}
+            </div>
+
+            <h3 style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+              {language === 'en' ? 'Point to Where It Hurts' : 'दर्द का स्थान चुनें (2D Body Map)'}
+            </h3>
+
+            <p style={{ fontSize: '16px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
+              {language === 'en'
+                ? 'Select anatomical pain regions (chest, upper abdomen, back, knee) on a front/back interactive diagram to skip verbal site questions.'
+                : 'शरीर के 2D चित्र पर स्पर्श करके दर्द का स्थान बताएं ताकि डॉक्टर को सटीक अंग की जानकारी तुरंत मिल सके।'}
+            </p>
+          </div>
+
+          <div style={{ marginTop: '28px' }}>
+            <KioskButton
+              variant="secondary"
+              size="lg"
+              fullWidth
+              icon={<MapPin size={22} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onOpenBodyMap) onOpenBodyMap();
+              }}
+              sublabel={language === 'en' ? 'Select pain areas' : 'शरीर के अंग चुनें'}
+            >
+              {language === 'en' ? 'Open 2D Body Map →' : '2D बॉडी मैप खोलें →'}
+            </KioskButton>
+          </div>
+        </KioskCard>
+
+        {/* Service 4: AYUSH Dashavidha Pariksha (Phase 5 Dev 1) */}
+        <KioskCard
+          padding="32px"
+          onClick={onStartAyush}
+          style={{
+            border: '2.5px solid #A7F3D0',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            background: 'linear-gradient(135deg, #FFFFFF 0%, #F0FDF4 100%)',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+          className="kiosk-card interactive"
+        >
+          <div>
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '16px',
+                background: '#ECFDF5',
+                color: '#059669',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: '18px',
+              }}
+            >
+              <Compass size={36} />
+            </div>
+
+            <div
+              style={{
+                display: 'inline-block',
+                fontSize: '12px',
+                fontWeight: 800,
+                color: '#059669',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                marginBottom: '6px',
+              }}
+            >
+              {language === 'en' ? 'Phase 5 · AYUSH Dashavidha Pariksha' : 'आयुष 10-चरणीय परीक्षा'}
+            </div>
+
+            <h3 style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A', marginBottom: '8px' }}>
+              {language === 'en' ? 'Ayurvedic 10-Stage Assessment' : 'दशविध परीक्षा (Prakriti & Dosha)'}
+            </h3>
+
+            <p style={{ fontSize: '16px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
+              {language === 'en'
+                ? 'Classical Dashavidha Pariksha evaluating Prakriti, Vikriti, Dhatu Sara, Agni, and Satva to generate an 8-fold Ayurvedic clinical summary.'
+                : 'प्रकृति, विकृति, सार, संहनन, और अग्नि का शास्त्रीय आयुर्वेदिक मूल्यांकन तथा त्रिदोष स्कोर विश्लेषण।'}
+            </p>
+          </div>
+
+          <div style={{ marginTop: '28px' }}>
+            <KioskButton
+              variant="primary"
+              size="lg"
+              fullWidth
+              icon={<Compass size={22} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onStartAyush) onStartAyush();
+              }}
+              sublabel={language === 'en' ? 'Prakriti & Dosha Score' : 'दशविध परीक्षा शुरू करें'}
+            >
+              {language === 'en' ? 'Start AYUSH Assessment →' : 'आयुष परीक्षा शुरू करें →'}
             </KioskButton>
           </div>
         </KioskCard>

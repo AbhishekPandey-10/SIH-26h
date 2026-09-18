@@ -52,6 +52,18 @@ async def init_db() -> None:
             "ALTER TABLE red_flag_events ADD COLUMN acknowledged_by VARCHAR(64)",
             "ALTER TABLE red_flag_events ADD COLUMN action_taken TEXT",
             "ALTER TABLE red_flag_events ADD COLUMN is_acknowledged BOOLEAN DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN caregiver_name VARCHAR(128)",
+            "ALTER TABLE sessions ADD COLUMN caregiver_relationship VARCHAR(64)",
+            "ALTER TABLE sessions ADD COLUMN caregiver_phone VARCHAR(16)",
+            "ALTER TABLE sessions ADD COLUMN voice_only_mode BOOLEAN DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN body_map_selections JSON",
+            "ALTER TABLE sessions ADD COLUMN interview_mode VARCHAR(32) DEFAULT 'allopathic'",
+            "ALTER TABLE sessions ADD COLUMN prakriti_result JSON",
+            "ALTER TABLE interview_transcripts ADD COLUMN is_proxy BOOLEAN DEFAULT 0",
+            "ALTER TABLE interview_transcripts ADD COLUMN proxy_name VARCHAR(128)",
+            "ALTER TABLE interview_transcripts ADD COLUMN proxy_relationship VARCHAR(64)",
+            "ALTER TABLE summaries ADD COLUMN lens VARCHAR(32) DEFAULT 'allopathic'",
+            "ALTER TABLE summaries ADD COLUMN ayush_json JSON",
         ]:
             try:
                 await conn.execute(text(col_def))

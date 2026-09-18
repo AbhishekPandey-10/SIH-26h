@@ -23,6 +23,17 @@ export const SessionProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Phase 5 State: Caregiver / Proxy, Voice-Only, Body Map, AYUSH Mode
+  const [isCaregiver, setIsCaregiver] = useState(false);
+  const [caregiverDetails, setCaregiverDetails] = useState({
+    name: '',
+    relationship: 'Family Member',
+    phone: '',
+  });
+  const [voiceOnlyMode, setVoiceOnlyMode] = useState(false);
+  const [interviewMode, setInterviewMode] = useState('allopathic'); // 'allopathic' | 'ayush'
+  const [bodyMapSelections, setBodyMapSelections] = useState([]);
+
   // Accessibility and Staff state
   const [isLargeText, setIsLargeText] = useState(false);
   const [isHighContrast, setIsHighContrast] = useState(false);
@@ -252,7 +263,12 @@ export const SessionProvider = ({ children }) => {
           abha_id: patient?.abha_id || null,
           patient_name: patient?.name || 'मरीज (Patient)',
           language: language,
-          is_caregiver: false,
+          is_caregiver: isCaregiver,
+          caregiver_name: isCaregiver ? caregiverDetails.name || null : null,
+          caregiver_relationship: isCaregiver ? caregiverDetails.relationship || null : null,
+          caregiver_phone: isCaregiver ? caregiverDetails.phone || null : null,
+          voice_only_mode: voiceOnlyMode,
+          interview_mode: interviewMode,
         }),
       });
 
@@ -287,6 +303,12 @@ export const SessionProvider = ({ children }) => {
         session_id: 'OPD-' + Math.floor(100000 + Math.random() * 900000),
         patient_name: patient?.name || 'मरीज (Patient)',
         status: 'active',
+        is_caregiver: isCaregiver,
+        caregiver_name: isCaregiver ? caregiverDetails.name || null : null,
+        caregiver_relationship: isCaregiver ? caregiverDetails.relationship || null : null,
+        caregiver_phone: isCaregiver ? caregiverDetails.phone || null : null,
+        voice_only_mode: voiceOnlyMode,
+        interview_mode: interviewMode,
         created_at: new Date().toISOString(),
       };
     }
@@ -298,7 +320,7 @@ export const SessionProvider = ({ children }) => {
 
     sessionStorage.setItem('active_session_id', sessionData.session_id);
     return sessionData;
-  }, [language, patient]);
+  }, [language, patient, isCaregiver, caregiverDetails, voiceOnlyMode, interviewMode]);
 
   /**
    * Full privacy wipe on session completion or idle timeout expiration
@@ -325,6 +347,11 @@ export const SessionProvider = ({ children }) => {
     setConsents(DEFAULT_CONSENTS);
     setVoiceConfirmationRef(null);
     setError(null);
+    setIsCaregiver(false);
+    setCaregiverDetails({ name: '', relationship: 'Family Member', phone: '' });
+    setVoiceOnlyMode(false);
+    setInterviewMode('allopathic');
+    setBodyMapSelections([]);
     setFlowStep('language');
 
     // 2. Purge Browser Storages
@@ -364,6 +391,17 @@ export const SessionProvider = ({ children }) => {
     submitConsent,
     wipePrivacyData,
     endSession: wipePrivacyData,
+    // Phase 5 caregiver, voice-only, AYUSH, body map
+    isCaregiver,
+    setIsCaregiver,
+    caregiverDetails,
+    setCaregiverDetails,
+    voiceOnlyMode,
+    setVoiceOnlyMode,
+    interviewMode,
+    setInterviewMode,
+    bodyMapSelections,
+    setBodyMapSelections,
     // Accessibility & Staff flags
     isLargeText,
     setIsLargeText,
