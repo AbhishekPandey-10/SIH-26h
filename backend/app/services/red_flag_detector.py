@@ -69,6 +69,42 @@ class RedFlagDetector:
 
         return None
 
+    def scan_and_confirm(self, text: str, session_id: str) -> RedFlagEvent | None:
+        """
+        1. Scans text for candidate keyword triggers in red_flags.json.
+        2. If candidate matched, runs Gemini confirmation:
+           'Patient statement: "{answer}"
+            Does this indicate any of these emergencies: {matched_keywords}?
+            Output: { "is_emergency": bool, "matched_rule": str, "confidence": float }'
+        3. Returns confirmed RedFlagEvent if is_emergency is True with >80% confidence.
+        """
+        candidate = self.scan_text(text, session_id)
+        if not candidate:
+            return None
+
+        # Run confirmation via question_generator
+        try:
+            from app.services.question_generator import question_generator
+            confirmation = question_generator.confirm_red_flag_emergency(
+                answer=text,
+                matched_keywords=[candidate.trigger_phrase, candidate.matched_rule],
+            )
+            if confirmation.get("is_emergency", False):
+                logger.warning(
+                    f"Red flag emergency CONFIRMED for session {session_id}: "
+                    f"{candidate.trigger_phrase} (confidence: {confirmation.get('confidence')})"
+                )
+                return candidate
+            else:
+                logger.info(
+                    f"Red flag candidate '{candidate.trigger_phrase}' deemed non-emergency "
+                    f"(confidence: {confirmation.get('confidence')})"
+                )
+                return None
+        except Exception as e:
+            logger.error(f"Error during red-flag confirmation: {e}; returning candidate event.")
+            return candidate
+
     def _create_event(self, item: dict[str, Any], matched_phrase: str, session_id: str) -> RedFlagEvent:
         return RedFlagEvent(
             event_id=f"rfe_{uuid.uuid4().hex[:12]}",

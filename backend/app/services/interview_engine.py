@@ -1,9 +1,14 @@
 """
-LangGraph Clinical Interview Engine
+LangGraph Clinical Interview Engine — Full Implementation
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
-State machine orchestrating the clinical history-taking flow in standard medical sequence:
-chief_complaint -> socrates_branch -> pmh -> medications -> allergies -> family_hx -> personal_hx -> ros -> complete
+State machine orchestrating the clinical history-taking flow:
+intake -> chief_complaint -> categorize_complaint ->
+  [if pain] -> socrates_pain
+  [if general] -> socrates_general
+  [if psych] -> psych_screening
+  [if obgyn] -> obgyn_history
+-> pmh -> medications -> allergies -> family_hx -> personal_hx -> ros -> complete
 """
 
 import logging
@@ -11,304 +16,441 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.services.question_generator import question_generator
 from app.shared.schemas import NextQuestion
 
 logger = logging.getLogger("medikiosk.interview_engine")
 
-InputType = Literal["voice_touch", "choice", "scale", "yes_no"]
-
-
-class PromptConfig(TypedDict, total=False):
-    hi: str
-    en: str
-    type: InputType
-    options: list[str]
-    progress: float
-
 
 class InterviewState(TypedDict, total=False):
     session_id: str
-    current_node: str
     language: str
-    chief_complaint: str | None
-    socrates: dict[str, Any]
-    pmh: list[str]
-    medications: list[str]
-    allergies: list[str]
-    family_hx: list[str]
-    personal_hx: list[str]
-    ros: dict[str, Any]
-    history: list[dict[str, Any]]
+    current_node: str
+    chief_complaint: str
+    chief_complaint_category: str  # "pain" | "general" | "psych" | "obgyn"
+    asked_questions: list[dict[str, Any]]
+    answers: list[dict[str, Any]]
+    extracted_context: list[dict[str, Any]]  # filled later by Smart Recall
+    red_flags_triggered: list[dict[str, Any]]
+
+    # Step navigation helpers
+    socrates_axis_index: int
     last_answer: str | None
     next_question: NextQuestion | None
     is_complete: bool
 
 
-# Localized default question texts for Hindi and English
-DEFAULT_PROMPTS: dict[str, PromptConfig] = {
-    "chief_complaint": {
-        "hi": "नमस्ते, आज आपको अस्पताल किस तकलीफ या समस्या के कारण आना पड़ा?",
-        "en": "Hello, what primary symptom or health concern brings you to the hospital today?",
-        "type": "voice_touch",
-        "progress": 10.0,
-    },
-    "socrates_branch": {
-        "hi": "यह दर्द या तकलीफ शरीर में ठीक किस जगह पर महसूस हो रही है, और यह कब शुरू हुई?",
-        "en": "Where exactly is this pain or symptom located, and when did it first begin?",
-        "type": "voice_touch",
-        "progress": 25.0,
-    },
-    "pmh": {
-        "hi": "क्या आपको पहले से कोई पुरानी बीमारी है (जैसे बीपी, शुगर, थायरॉइड, अस्थमा)?",
-        "en": "Do you have any past medical conditions (such as diabetes, hypertension, thyroid, asthma)?",
-        "type": "choice",
-        "options": ["मधुमेह (Diabetes)", "उच्च रक्तचाप (Hypertension)", "थायरॉइड (Thyroid)", "अस्थमा (Asthma)", "कोई नहीं (None)"],
-        "progress": 40.0,
-    },
-    "medications": {
-        "hi": "क्या आप वर्तमान में नियमित रूप से कोई दवाई या गोली ले रहे हैं?",
-        "en": "Are you currently taking any regular medications or tablets?",
-        "type": "voice_touch",
-        "progress": 55.0,
-    },
-    "allergies": {
-        "hi": "क्या आपको किसी दवाई, इंजेक्शन या खाने की चीज़ से कोई एलर्जी है?",
-        "en": "Do you have any known allergies to medicines, injections, or food?",
-        "type": "yes_no",
-        "options": ["हाँ (Yes)", "नहीं (No)"],
-        "progress": 70.0,
-    },
-    "family_hx": {
-        "hi": "क्या आपके परिवार (माता-पिता, भाई-बहन) में किसी को दिल की बीमारी, शुगर या कैंसर का इतिहास है?",
-        "en": "Is there a family history of heart disease, diabetes, or cancer among immediate relatives?",
-        "type": "voice_touch",
-        "progress": 80.0,
-    },
-    "personal_hx": {
-        "hi": "आपकी जीवनशैली से जुड़ी आदतें (धूम्रपान, तंबाकू, शराब सेवन आदि)?",
-        "en": "Any personal habits (smoking, tobacco, alcohol consumption)?",
-        "type": "choice",
-        "options": ["तंबाकू / बीड़ी (Tobacco/Bidi)", "शराब (Alcohol)", "दोनों (Both)", "कोई नशा नहीं (None)"],
-        "progress": 90.0,
-    },
-    "ros": {
-        "hi": "क्या इनके अलावा बुखार, चक्कर आना, वजन घटना या भूख में कमी जैसी कोई अन्य शिकायत है?",
-        "en": "Apart from this, any systemic symptoms like fever, dizziness, weight loss, or appetite changes?",
-        "type": "voice_touch",
-        "progress": 95.0,
-    },
-    "complete": {
-        "hi": "धन्यवाद! आपकी प्राथमिक जानकारी दर्ज कर ली गई है। कृपया डॉक्टर के केबिन के बाहर प्रतीक्षा करें।",
-        "en": "Thank you! Your intake is complete. A clinical summary has been generated for the doctor.",
-        "type": "voice_touch",
-        "progress": 100.0,
-    },
-}
+PAIN_AXES = [
+    "site",
+    "onset",
+    "character",
+    "radiation",
+    "associations",
+    "time",
+    "exacerbating",
+    "severity",
+]
+GENERAL_AXES = ["duration", "pattern", "associated", "severity"]
+PSYCH_AXES = ["duration", "sleep_appetite", "triggers", "safety"]
+OBGYN_AXES = ["lmp", "regularity", "pregnancy"]
 
 
-def node_chief_complaint(state: InterviewState) -> InterviewState:
+def node_intake(state: InterviewState) -> InterviewState:
+    """Initial kiosk intake node."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["chief_complaint"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_cc_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "voice_touch"),
-        section="chief_complaint",
-        progress_pct=prompt_cfg.get("progress", 10.0),
-    )
-    cc = state.get("last_answer") or state.get("chief_complaint")
     return {
-        "current_node": "chief_complaint",
-        "chief_complaint": cc,
-        "next_question": q,
+        "current_node": "intake",
+        "language": lang,
+        "chief_complaint_category": "general",
+        "asked_questions": state.get("asked_questions", []),
+        "answers": state.get("answers", []),
+        "extracted_context": state.get("extracted_context", []),
+        "red_flags_triggered": state.get("red_flags_triggered", []),
+        "socrates_axis_index": 0,
     }
 
 
-def node_socrates_branch(state: InterviewState) -> InterviewState:
+def node_chief_complaint(state: InterviewState) -> InterviewState:
+    """Chief complaint elicitation."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["socrates_branch"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_soc_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "voice_touch"),
-        section="socrates",
-        progress_pct=prompt_cfg.get("progress", 25.0),
+    is_hi = (lang == "hi")
+    text = (
+        "नमस्ते, आज आपको अस्पताल किस तकलीफ या समस्या के कारण आना पड़ा?"
+        if is_hi
+        else "Hello, what primary symptom or health concern brings you to the hospital today?"
     )
-    socrates = dict(state.get("socrates", {}))
-    ans = state.get("last_answer")
-    if ans:
-        socrates["site_onset"] = ans
+    nq = NextQuestion(
+        question_id="q_cc_01",
+        text=text,
+        input_type="voice_touch",
+        options=["सीने में दर्द (Chest pain)", "बुखार (Fever)", "पेट में दर्द (Stomach pain)", "सिरदर्द (Headache)"],
+        section="chief_complaint",
+        progress_pct=10.0,
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
     return {
-        "current_node": "socrates_branch",
-        "socrates": socrates,
-        "next_question": q,
+        "current_node": "chief_complaint",
+        "next_question": nq,
+        "asked_questions": asked,
+    }
+
+
+def node_categorize_complaint(state: InterviewState) -> InterviewState:
+    """Classifies the chief complaint category (pain | general | psych | obgyn)."""
+    cc = state.get("last_answer") or state.get("chief_complaint") or ""
+    category = question_generator.classify_complaint(cc)
+    logger.info(f"Session {state.get('session_id')}: Categorized chief complaint '{cc}' as '{category}'")
+    return {
+        "current_node": "categorize_complaint",
+        "chief_complaint": cc,
+        "chief_complaint_category": category,
+        "socrates_axis_index": 0,
+    }
+
+
+def route_complaint(state: InterviewState) -> Literal["socrates_pain", "socrates_general", "psych_screening", "obgyn_history"]:
+    """Conditional router based on categorized chief complaint."""
+    cat = state.get("chief_complaint_category", "general")
+    if cat == "pain":
+        return "socrates_pain"
+    elif cat == "psych":
+        return "psych_screening"
+    elif cat == "obgyn":
+        return "obgyn_history"
+    else:
+        return "socrates_general"
+
+
+def node_socrates_pain(state: InterviewState) -> InterviewState:
+    """SOCRATES pain framework questions."""
+    idx = state.get("socrates_axis_index", 0)
+    axis = PAIN_AXES[min(idx, len(PAIN_AXES) - 1)]
+    lang = state.get("language", "hi")
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+
+    q_data = question_generator.generate_question(
+        current_section="socrates_pain",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
+        socrates_axis=axis,
+    )
+
+    nq = NextQuestion(
+        question_id=q_data.get("question_id", f"soc_pain_{axis}"),
+        text=q_data.get("text", "दर्द कहाँ है?"),
+        input_type=q_data.get("input_type", "voice_touch"),
+        options=q_data.get("options"),
+        section="socrates",
+        progress_pct=25.0 + min(idx * 2.0, 15.0),
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {
+        "current_node": "socrates_pain",
+        "next_question": nq,
+        "asked_questions": asked,
+    }
+
+
+def node_socrates_general(state: InterviewState) -> InterviewState:
+    """Adapted SOCRATES questions for general complaints (fever, weakness, cough)."""
+    idx = state.get("socrates_axis_index", 0)
+    axis = GENERAL_AXES[min(idx, len(GENERAL_AXES) - 1)]
+    lang = state.get("language", "hi")
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+
+    q_data = question_generator.generate_question(
+        current_section="socrates_general",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
+        socrates_axis=axis,
+    )
+
+    nq = NextQuestion(
+        question_id=q_data.get("question_id", f"soc_gen_{axis}"),
+        text=q_data.get("text", "तकलीफ कितने दिन से है?"),
+        input_type=q_data.get("input_type", "voice_touch"),
+        options=q_data.get("options"),
+        section="socrates",
+        progress_pct=25.0 + min(idx * 4.0, 15.0),
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {
+        "current_node": "socrates_general",
+        "next_question": nq,
+        "asked_questions": asked,
+    }
+
+
+def node_psych_screening(state: InterviewState) -> InterviewState:
+    """Psychiatric screening flow for emotional/mental health chief complaints."""
+    idx = state.get("socrates_axis_index", 0)
+    axis = PSYCH_AXES[min(idx, len(PSYCH_AXES) - 1)]
+    lang = state.get("language", "hi")
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+
+    q_data = question_generator.generate_question(
+        current_section="psych_screening",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
+        socrates_axis=axis,
+    )
+
+    nq = NextQuestion(
+        question_id=q_data.get("question_id", f"soc_psych_{axis}"),
+        text=q_data.get("text", "आप कैसा महसूस कर रहे हैं?"),
+        input_type=q_data.get("input_type", "voice_touch"),
+        options=q_data.get("options"),
+        section="socrates",
+        progress_pct=25.0 + min(idx * 4.0, 15.0),
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {
+        "current_node": "psych_screening",
+        "next_question": nq,
+        "asked_questions": asked,
+    }
+
+
+def node_obgyn_history(state: InterviewState) -> InterviewState:
+    """OBGYN history flow for female reproductive/obstetric complaints."""
+    idx = state.get("socrates_axis_index", 0)
+    axis = OBGYN_AXES[min(idx, len(OBGYN_AXES) - 1)]
+    lang = state.get("language", "hi")
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+
+    q_data = question_generator.generate_question(
+        current_section="obgyn_history",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
+        socrates_axis=axis,
+    )
+
+    nq = NextQuestion(
+        question_id=q_data.get("question_id", f"soc_obgyn_{axis}"),
+        text=q_data.get("text", "पिछली माहवारी की तारीख क्या थी?"),
+        input_type=q_data.get("input_type", "voice_touch"),
+        options=q_data.get("options"),
+        section="socrates",
+        progress_pct=25.0 + min(idx * 5.0, 15.0),
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {
+        "current_node": "obgyn_history",
+        "next_question": nq,
+        "asked_questions": asked,
     }
 
 
 def node_pmh(state: InterviewState) -> InterviewState:
+    """Past Medical History."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["pmh"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_pmh_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "choice"),
-        options=prompt_cfg.get("options"),
-        section="pmh",
-        progress_pct=prompt_cfg.get("progress", 40.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="pmh",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
-    pmh = list(state.get("pmh", []))
-    ans = state.get("last_answer")
-    if ans:
-        pmh.append(ans)
-    return {
-        "current_node": "pmh",
-        "pmh": pmh,
-        "next_question": q,
-    }
+    nq = NextQuestion(
+        question_id="q_pmh_01",
+        text=q_data.get("text", "क्या आपको पहले से कोई बीमारी है?"),
+        input_type="choice",
+        options=q_data.get("options", ["मधुमेह", "उच्च रक्तचाप", "थायरॉइड", "कोई नहीं"]),
+        section="pmh",
+        progress_pct=45.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {"current_node": "pmh", "next_question": nq, "asked_questions": asked}
 
 
 def node_medications(state: InterviewState) -> InterviewState:
+    """Medications intake."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["medications"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_med_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "voice_touch"),
-        section="medications",
-        progress_pct=prompt_cfg.get("progress", 55.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="medications",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
-    meds = list(state.get("medications", []))
-    ans = state.get("last_answer")
-    if ans:
-        meds.append(ans)
-    return {
-        "current_node": "medications",
-        "medications": meds,
-        "next_question": q,
-    }
+    nq = NextQuestion(
+        question_id="q_med_01",
+        text=q_data.get("text", "क्या आप कोई नियमित दवाई ले रहे हैं?"),
+        input_type="voice_touch",
+        options=q_data.get("options", ["हाँ", "नहीं"]),
+        section="medications",
+        progress_pct=58.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {"current_node": "medications", "next_question": nq, "asked_questions": asked}
 
 
 def node_allergies(state: InterviewState) -> InterviewState:
+    """Allergies screen."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["allergies"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_all_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "yes_no"),
-        options=prompt_cfg.get("options"),
-        section="allergies",
-        progress_pct=prompt_cfg.get("progress", 70.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="allergies",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
-    allergies = list(state.get("allergies", []))
-    ans = state.get("last_answer")
-    if ans:
-        allergies.append(ans)
-    return {
-        "current_node": "allergies",
-        "allergies": allergies,
-        "next_question": q,
-    }
+    nq = NextQuestion(
+        question_id="q_all_01",
+        text=q_data.get("text", "क्या आपको किसी दवाई से एलर्जी है?"),
+        input_type="yes_no",
+        options=q_data.get("options", ["हाँ", "नहीं"]),
+        section="allergies",
+        progress_pct=70.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {"current_node": "allergies", "next_question": nq, "asked_questions": asked}
 
 
 def node_family_hx(state: InterviewState) -> InterviewState:
+    """Family history."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["family_hx"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_fam_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "voice_touch"),
-        section="family_hx",
-        progress_pct=prompt_cfg.get("progress", 80.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="family_hx",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
-    fam = list(state.get("family_hx", []))
-    ans = state.get("last_answer")
-    if ans:
-        fam.append(ans)
-    return {
-        "current_node": "family_hx",
-        "family_hx": fam,
-        "next_question": q,
-    }
+    nq = NextQuestion(
+        question_id="q_fam_01",
+        text=q_data.get("text", "क्या परिवार में किसी को गंभीर बीमारी है?"),
+        input_type="voice_touch",
+        options=q_data.get("options", ["हाँ", "नहीं"]),
+        section="family_hx",
+        progress_pct=80.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {"current_node": "family_hx", "next_question": nq, "asked_questions": asked}
 
 
 def node_personal_hx(state: InterviewState) -> InterviewState:
+    """Personal habits (smoking, tobacco, alcohol)."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["personal_hx"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_per_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "choice"),
-        options=prompt_cfg.get("options"),
-        section="personal_hx",
-        progress_pct=prompt_cfg.get("progress", 90.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="personal_hx",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
-    per = list(state.get("personal_hx", []))
-    ans = state.get("last_answer")
-    if ans:
-        per.append(ans)
-    return {
-        "current_node": "personal_hx",
-        "personal_hx": per,
-        "next_question": q,
-    }
+    nq = NextQuestion(
+        question_id="q_per_01",
+        text=q_data.get("text", "धूम्रपान, तंबाकू या शराब का सेवन?"),
+        input_type="choice",
+        options=q_data.get("options", ["तंबाकू / बीड़ी", "शराब", "कोई नशा नहीं"]),
+        section="personal_hx",
+        progress_pct=90.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {"current_node": "personal_hx", "next_question": nq, "asked_questions": asked}
 
 
 def node_ros(state: InterviewState) -> InterviewState:
+    """Review of systems."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["ros"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_ros_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "voice_touch"),
-        section="ros",
-        progress_pct=prompt_cfg.get("progress", 95.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="ros",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
-    ros = dict(state.get("ros", {}))
-    ans = state.get("last_answer")
-    if ans:
-        ros["general"] = ans
-    return {
-        "current_node": "ros",
-        "ros": ros,
-        "next_question": q,
-    }
+    nq = NextQuestion(
+        question_id="q_ros_01",
+        text=q_data.get("text", "अन्य कोई शिकायत जैसे चक्कर या कमजोरी?"),
+        input_type="voice_touch",
+        options=q_data.get("options", ["हाँ", "नहीं"]),
+        section="ros",
+        progress_pct=95.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
+    return {"current_node": "ros", "next_question": nq, "asked_questions": asked}
 
 
 def node_complete(state: InterviewState) -> InterviewState:
+    """Interview completion."""
     lang = state.get("language", "hi")
-    prompt_cfg = DEFAULT_PROMPTS["complete"]
-    text = prompt_cfg.get("en", "") if lang == "en" else prompt_cfg["hi"]
-    q = NextQuestion(
-        question_id="q_end_01",
-        text=text,
-        input_type=prompt_cfg.get("type", "voice_touch"),
-        section="complete",
-        progress_pct=prompt_cfg.get("progress", 100.0),
+    cc = state.get("chief_complaint", "")
+    answers = state.get("answers", [])
+    q_data = question_generator.generate_question(
+        current_section="complete",
+        chief_complaint=cc,
+        context=answers,
+        language=lang,
     )
+    nq = NextQuestion(
+        question_id="q_end_01",
+        text=q_data.get("text", "धन्यवाद! जानकारी दर्ज कर ली गई है।"),
+        input_type="voice_touch",
+        options=["ठीक है (OK)"],
+        section="complete",
+        progress_pct=100.0,
+        metadata=q_data.get("metadata"),
+    )
+    asked = list(state.get("asked_questions", []))
+    asked.append(nq.model_dump())
     return {
         "current_node": "complete",
         "is_complete": True,
-        "next_question": q,
+        "next_question": nq,
+        "asked_questions": asked,
     }
 
 
 def build_interview_graph() -> Any:
     """
-    Builds the compiled LangGraph StateGraph connecting all 9 nodes in sequence.
+    Builds the full LangGraph state machine with adaptive SOCRATES routing.
     """
     builder = StateGraph(InterviewState)
 
-    # 1. Add all 9 nodes
+    builder.add_node("intake", node_intake)
     builder.add_node("chief_complaint", node_chief_complaint)
-    builder.add_node("socrates_branch", node_socrates_branch)
+    builder.add_node("categorize_complaint", node_categorize_complaint)
+    builder.add_node("socrates_pain", node_socrates_pain)
+    builder.add_node("socrates_general", node_socrates_general)
+    builder.add_node("psych_screening", node_psych_screening)
+    builder.add_node("obgyn_history", node_obgyn_history)
     builder.add_node("pmh", node_pmh)
     builder.add_node("medications", node_medications)
     builder.add_node("allergies", node_allergies)
@@ -317,10 +459,30 @@ def build_interview_graph() -> Any:
     builder.add_node("ros", node_ros)
     builder.add_node("complete", node_complete)
 
-    # 2. Add sequential edges as requested
-    builder.add_edge(START, "chief_complaint")
-    builder.add_edge("chief_complaint", "socrates_branch")
-    builder.add_edge("socrates_branch", "pmh")
+    # Wiring edges
+    builder.add_edge(START, "intake")
+    builder.add_edge("intake", "chief_complaint")
+    builder.add_edge("chief_complaint", "categorize_complaint")
+
+    # Conditional branching from categorize_complaint
+    builder.add_conditional_edges(
+        "categorize_complaint",
+        route_complaint,
+        {
+            "socrates_pain": "socrates_pain",
+            "socrates_general": "socrates_general",
+            "psych_screening": "psych_screening",
+            "obgyn_history": "obgyn_history",
+        }
+    )
+
+    # All branches flow to PMH
+    builder.add_edge("socrates_pain", "pmh")
+    builder.add_edge("socrates_general", "pmh")
+    builder.add_edge("psych_screening", "pmh")
+    builder.add_edge("obgyn_history", "pmh")
+
+    # Linear progression to completion
     builder.add_edge("pmh", "medications")
     builder.add_edge("medications", "allergies")
     builder.add_edge("allergies", "family_hx")
@@ -332,22 +494,14 @@ def build_interview_graph() -> Any:
     return builder.compile()
 
 
-# Sequence list for step navigation
-NODE_SEQUENCE = [
-    "chief_complaint",
-    "socrates_branch",
-    "pmh",
-    "medications",
-    "allergies",
-    "family_hx",
-    "personal_hx",
-    "ros",
-    "complete",
-]
-
 NODE_HANDLERS = {
+    "intake": node_intake,
     "chief_complaint": node_chief_complaint,
-    "socrates_branch": node_socrates_branch,
+    "categorize_complaint": node_categorize_complaint,
+    "socrates_pain": node_socrates_pain,
+    "socrates_general": node_socrates_general,
+    "psych_screening": node_psych_screening,
+    "obgyn_history": node_obgyn_history,
     "pmh": node_pmh,
     "medications": node_medications,
     "allergies": node_allergies,
@@ -360,7 +514,7 @@ NODE_HANDLERS = {
 
 class InterviewEngine:
     """
-    Stateful manager for active Kiosk interview sessions.
+    Session manager orchestrating the adaptive clinical history interview.
     """
     def __init__(self):
         self.sessions: dict[str, InterviewState] = {}
@@ -370,63 +524,114 @@ class InterviewEngine:
         if session_id not in self.sessions:
             self.sessions[session_id] = {
                 "session_id": session_id,
-                "current_node": "",
+                "current_node": "intake",
                 "language": language,
-                "chief_complaint": None,
-                "socrates": {},
-                "pmh": [],
-                "medications": [],
-                "allergies": [],
-                "family_hx": [],
-                "personal_hx": [],
-                "ros": {},
-                "history": [],
+                "chief_complaint": "",
+                "chief_complaint_category": "general",
+                "asked_questions": [],
+                "answers": [],
+                "extracted_context": [],
+                "red_flags_triggered": [],
+                "socrates_axis_index": 0,
                 "last_answer": None,
                 "next_question": None,
                 "is_complete": False,
             }
         return self.sessions[session_id]
 
-    def start_interview(self, session_id: str, language: str = "hi") -> NextQuestion:
+    def start_interview(self, session_id: str = "dev-test-001", language: str = "hi") -> NextQuestion:
         state = self.get_or_create_session(session_id, language)
         state["language"] = language
-        result = node_chief_complaint(state)
-        state.update(result)
+        # Run through intake and prompt for chief_complaint
+        state.update(node_intake(state))
+        cc_result = node_chief_complaint(state)
+        state.update(cc_result)
         nq = state.get("next_question")
         assert nq is not None
         return nq
 
-    def step(self, session_id: str, answer_text: str, language: str | None = None) -> NextQuestion:
+    def step(
+        self,
+        session_id: str,
+        answer_text: str,
+        language: str | None = None,
+        verbatim_voice: str | None = None,
+    ) -> NextQuestion:
         state = self.get_or_create_session(session_id)
         if language:
             state["language"] = language
 
-        curr = state.get("current_node", "")
+        curr_node = state.get("current_node", "chief_complaint")
         state["last_answer"] = answer_text
 
-        # Record into history
-        if "history" not in state:
-            state["history"] = []
-        state["history"].append({
-            "node": curr,
-            "answer": answer_text,
+        # Record answer
+        answers = list(state.get("answers", []))
+        last_q = state.get("next_question")
+        answers.append({
+            "node": curr_node,
+            "question_id": last_q.question_id if last_q else "unknown",
+            "question_text": last_q.text if last_q else "",
+            "answer_text": answer_text,
+            "verbatim_voice": verbatim_voice,
+            "language": state["language"],
         })
+        state["answers"] = answers
 
-        # Advance to next node in NODE_SEQUENCE
-        if curr in NODE_SEQUENCE:
-            idx = NODE_SEQUENCE.index(curr)
-            next_idx = min(idx + 1, len(NODE_SEQUENCE) - 1)
-            next_node_name = NODE_SEQUENCE[next_idx]
+        # State transitions
+        if curr_node == "chief_complaint":
+            state["chief_complaint"] = answer_text
+            cat_result = node_categorize_complaint(state)
+            state.update(cat_result)
+            next_node_name = route_complaint(state)
+            state["current_node"] = next_node_name
+            handler = NODE_HANDLERS[next_node_name]
+            result = handler(state)
+            state.update(result)
+
+        elif curr_node in ["socrates_pain", "socrates_general", "psych_screening", "obgyn_history"]:
+            # Advance to PMH
+            state["current_node"] = "pmh"
+            result = node_pmh(state)
+            state.update(result)
+
+        elif curr_node == "pmh":
+            state["current_node"] = "medications"
+            result = node_medications(state)
+            state.update(result)
+
+        elif curr_node == "medications":
+            state["current_node"] = "allergies"
+            result = node_allergies(state)
+            state.update(result)
+
+        elif curr_node == "allergies":
+            state["current_node"] = "family_hx"
+            result = node_family_hx(state)
+            state.update(result)
+
+        elif curr_node == "family_hx":
+            state["current_node"] = "personal_hx"
+            result = node_personal_hx(state)
+            state.update(result)
+
+        elif curr_node == "personal_hx":
+            state["current_node"] = "ros"
+            result = node_ros(state)
+            state.update(result)
+
+        elif curr_node == "ros":
+            state["current_node"] = "complete"
+            result = node_complete(state)
+            state.update(result)
+
         else:
-            next_node_name = "chief_complaint"
+            state["current_node"] = "complete"
+            result = node_complete(state)
+            state.update(result)
 
-        handler = NODE_HANDLERS[next_node_name]
-        result = handler(state)
-        state.update(result)
         nq = state.get("next_question")
         assert nq is not None
         return nq
 
 
-# Global engine instance
 interview_engine = InterviewEngine()

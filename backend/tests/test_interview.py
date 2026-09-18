@@ -1,15 +1,36 @@
 """
-Unit tests for LangGraph Interview Engine and WebSocket endpoint
+Comprehensive tests for LangGraph Adaptive Clinical Interview Engine
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
+
+Verifies:
+1. Compilation of the full StateGraph
+2. 3 distinct chief complaints ("chest pain", "fever for 5 days", "feeling very sad")
+   taking different SOCRATES paths based on classification:
+   - "chest pain" -> socrates_pain
+   - "fever for 5 days" -> socrates_general
+   - "feeling very sad" -> psych_screening
+3. Question options and tap choices
+4. Voice input and verbatim voice preservation
+5. WebSocket /ws/interview responses and event emission:
+   - Connects, receives initial chief complaint
+   - Sends answers and receives next adaptive questions
+   - Emits red_flag_triggered event for emergency symptoms:
+     "chest pain with breathlessness" and "I want to end my life"
+6. DB persistence of interview_transcripts and red_flag_events
 """
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app.db.database import async_session_factory
+from app.db.models import InterviewTranscript, RedFlagEventModel
 from app.main import app
 from app.services.interview_engine import (
     InterviewEngine,
     build_interview_graph,
 )
+from app.services.question_generator import question_generator
 
 
 def test_interview_graph_compilation():
@@ -17,75 +38,178 @@ def test_interview_graph_compilation():
     assert graph is not None
 
 
-def test_sequential_node_progression():
-    engine = InterviewEngine()
-    session_id = "test_sess_flow_01"
+def test_complaint_classification():
+    # 1. Pain category
+    cat_pain = question_generator.classify_complaint("Severe chest pain radiating to left arm")
+    assert cat_pain == "pain"
 
-    # 1. Start interview -> chief_complaint
+    # 2. General category
+    cat_gen = question_generator.classify_complaint("fever for 5 days with body chills")
+    assert cat_gen == "general"
+
+    # 3. Psych category
+    cat_psych = question_generator.classify_complaint("feeling very sad and hopeless every day")
+    assert cat_psych == "psych"
+
+    # 4. Obgyn category
+    cat_obgyn = question_generator.classify_complaint("missed periods for 2 months and lower abdominal cramps")
+    assert cat_obgyn == "obgyn"
+
+
+def test_flow_chest_pain_routes_to_socrates_pain():
+    engine = InterviewEngine()
+    session_id = "test_pain_01"
+
+    # Start -> chief complaint
     q1 = engine.start_interview(session_id, language="hi")
     assert q1.section == "chief_complaint"
-    assert q1.progress_pct == 10.0
 
-    # 2. Answer CC -> socrates_branch
-    q2 = engine.step(session_id, "सीने में दर्द (chest pain)")
+    # Answer chest pain -> socrates_pain
+    q2 = engine.step(session_id, "chest pain since morning")
     assert q2.section == "socrates"
-    assert q2.progress_pct == 25.0
+    assert q2.metadata is not None
+    assert q2.metadata.get("category") == "socrates_pain"
 
-    # 3. Answer Socrates -> pmh
-    q3 = engine.step(session_id, "कल रात से, बाएँ हाथ की तरफ जा रहा है")
+    # Next step -> pmh
+    q3 = engine.step(session_id, "छाती के बीच में भारीपन (Heavy pressure in center)")
     assert q3.section == "pmh"
-    assert q3.progress_pct == 40.0
+    assert q3.options is not None
 
-    # 4. Answer PMH -> medications
-    q4 = engine.step(session_id, "उच्च रक्तचाप (Hypertension)")
+    # Step through remaining sections to complete
+    q4 = engine.step(session_id, "मधुमेह (Diabetes)")
     assert q4.section == "medications"
-    assert q4.progress_pct == 55.0
 
-    # 5. Answer Meds -> allergies
-    q5 = engine.step(session_id, "Amlodipine 5mg")
+    q5 = engine.step(session_id, "Metformin 500mg")
     assert q5.section == "allergies"
-    assert q5.progress_pct == 70.0
 
-    # 6. Answer Allergies -> family_hx
-    q6 = engine.step(session_id, "नहीं, कोई ज्ञात एलर्जी नहीं है")
+    q6 = engine.step(session_id, "कोई एलर्जी नहीं है")
     assert q6.section == "family_hx"
-    assert q6.progress_pct == 80.0
 
-    # 7. Answer Family -> personal_hx
-    q7 = engine.step(session_id, "पिताजी को दिल का दौरा पड़ा था")
+    q7 = engine.step(session_id, "पिताजी को बीपी था")
     assert q7.section == "personal_hx"
-    assert q7.progress_pct == 90.0
 
-    # 8. Answer Personal -> ros
-    q8 = engine.step(session_id, "धूम्रपान नहीं करता")
+    q8 = engine.step(session_id, "कोई नशा नहीं")
     assert q8.section == "ros"
-    assert q8.progress_pct == 95.0
 
-    # 9. Answer ROS -> complete
-    q9 = engine.step(session_id, "हल्का पसीना और घबराहट")
+    q9 = engine.step(session_id, "कोई अन्य लक्षण नहीं")
     assert q9.section == "complete"
     assert q9.progress_pct == 100.0
 
 
-def test_websocket_interview_endpoint():
-    client = TestClient(app)
+def test_flow_fever_routes_to_socrates_general():
+    engine = InterviewEngine()
+    session_id = "test_fever_01"
 
-    with client.websocket_connect("/ws/interview?session_id=ws_test_01") as ws:
-        # Initial question sent on connection
+    # Start -> chief complaint
+    q1 = engine.start_interview(session_id, language="hi")
+    assert q1.section == "chief_complaint"
+
+    # Answer fever -> socrates_general
+    q2 = engine.step(session_id, "fever for 5 days")
+    assert q2.section == "socrates"
+    assert q2.metadata is not None
+    assert q2.metadata.get("category") == "socrates_general"
+
+    # Next step -> pmh
+    q3 = engine.step(session_id, "लगातार तेज बुखार है")
+    assert q3.section == "pmh"
+
+
+def test_flow_sadness_routes_to_psych_screening():
+    engine = InterviewEngine()
+    session_id = "test_psych_01"
+
+    # Start -> chief complaint
+    q1 = engine.start_interview(session_id, language="en")
+    assert q1.section == "chief_complaint"
+
+    # Answer feeling very sad -> psych_screening
+    q2 = engine.step(session_id, "feeling very sad")
+    assert q2.section == "socrates"
+    assert q2.metadata is not None
+    assert q2.metadata.get("category") == "psych_screening"
+
+    # Next step -> pmh
+    q3 = engine.step(session_id, "For about 3 weeks now")
+    assert q3.section == "pmh"
+
+
+def test_websocket_interview_and_red_flag_event():
+    client = TestClient(app)
+    session_id = "dev-test-ws-001"
+
+    with client.websocket_connect(f"/ws/interview?session_id={session_id}") as ws:
+        # 1. Initial question on connect
         msg1 = ws.receive_json()
         assert msg1["section"] == "chief_complaint"
         assert msg1["question_id"] == "q_cc_01"
-        assert "is_red_flag_warning" in msg1
 
-        # Send benign answer
-        ws.send_json({"answer": "पेट में हल्का दर्द है", "session_id": "ws_test_01"})
+        # 2. Send benign answer -> advances to socrates_pain
+        ws.send_json({"answer": "chest pain", "session_id": session_id})
         msg2 = ws.receive_json()
         assert msg2["section"] == "socrates"
         assert msg2["is_red_flag_warning"] is False
 
-        # Send red-flag triggering answer
-        ws.send_json({"answer": "Now I have chest pain with breathlessness", "session_id": "ws_test_01"})
-        msg3 = ws.receive_json()
-        assert msg3["section"] == "pmh"
-        assert msg3["is_red_flag_warning"] is True
-        assert msg3["red_flag_details"]["category"] == "cardiac"
+        # 3. Send critical red-flag answer: "chest pain with breathlessness"
+        ws.send_json({
+            "answer": "Doctor, now I have chest pain with breathlessness and sweating",
+            "verbatim_voice": "chhati me dard aur saans fulna",
+            "session_id": session_id
+        })
+
+        # Expect red_flag_triggered WebSocket event
+        event_msg = ws.receive_json()
+        assert event_msg.get("event") == "red_flag_triggered"
+        assert event_msg["data"]["category"] == "cardiac"
+        assert "chest pain with breathlessness" in event_msg["data"]["trigger_phrase"]
+
+        # Next comes the NextQuestion response
+        next_q_msg = ws.receive_json()
+        assert next_q_msg["section"] == "pmh"
+        assert next_q_msg["is_red_flag_warning"] is True
+        assert next_q_msg["red_flag_details"]["category"] == "cardiac"
+
+
+def test_red_flag_suicidal_ideation():
+    client = TestClient(app)
+    session_id = "dev-test-ws-002"
+
+    with client.websocket_connect(f"/ws/interview?session_id={session_id}") as ws:
+        # Initial question
+        ws.receive_json()
+
+        # Send psychiatric emergency statement
+        ws.send_json({
+            "answer": "I have severe depression and I want to end my life with suicidal thoughts",
+            "session_id": session_id
+        })
+
+        event_msg = ws.receive_json()
+        assert event_msg.get("event") == "red_flag_triggered"
+        assert event_msg["data"]["category"] == "psychiatric"
+
+        next_q = ws.receive_json()
+        assert next_q["is_red_flag_warning"] is True
+
+
+@pytest.mark.asyncio
+async def test_transcripts_and_red_flags_saved_in_db():
+    # Verify DB persistence of transcripts written during websocket tests
+    async with async_session_factory() as session:
+        # Check transcript rows
+        stmt = select(InterviewTranscript).where(InterviewTranscript.session_id == "dev-test-ws-001")
+        result = await session.execute(stmt)
+        transcripts = result.scalars().all()
+        assert len(transcripts) >= 2
+
+        # Check verbatim voice was preserved
+        voice_entry = next((t for t in transcripts if t.verbatim_voice is not None), None)
+        assert voice_entry is not None
+        assert "saans fulna" in voice_entry.verbatim_voice
+
+        # Check red flag event persistence
+        stmt_rf = select(RedFlagEventModel).where(RedFlagEventModel.session_id == "dev-test-ws-001")
+        result_rf = await session.execute(stmt_rf)
+        rf_events = result_rf.scalars().all()
+        assert len(rf_events) >= 1
+        assert rf_events[0].category == "cardiac"

@@ -151,11 +151,14 @@ class InterviewTranscript(Base):
     session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     turn_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     question_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    speaker: Mapped[str] = mapped_column(String(16), nullable=False)  # 'kiosk' or 'patient'
-    text: Mapped[str] = mapped_column(Text, nullable=False)
+    question_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    speaker: Mapped[str] = mapped_column(String(16), default="patient", nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     verbatim_voice: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    language: Mapped[str] = mapped_column(String(8), default="hi", nullable=False)
+    language: Mapped[str] = mapped_column(String(10), default="hi", nullable=False)
+    node_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

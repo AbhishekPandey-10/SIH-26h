@@ -25,7 +25,7 @@ class NextQuestion(BaseModel):
     question_id: str = Field(..., description="Unique question identifier, e.g. 'cc_01', 'soc_site'")
     text: str = Field(..., description="Display text of the question in active language")
     audio_url: str | None = Field(None, description="Pre-synthesized TTS audio URL or data URI if available")
-    input_type: Literal["voice_touch", "choice", "scale", "yes_no"] = Field(
+    input_type: Literal["voice_touch", "choice", "scale", "yes_no", "voice", "tap"] = Field(
         default="voice_touch",
         description="Expected interaction mode on Kiosk UI"
     )
@@ -50,6 +50,10 @@ class NextQuestion(BaseModel):
     red_flag_details: dict[str, Any] | None = Field(
         default=None,
         description="Optional warning metadata to render a calming alert on Kiosk"
+    )
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional clinical metadata e.g. socrates_axis, category"
     )
 
 

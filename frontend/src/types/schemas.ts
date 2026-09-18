@@ -1,15 +1,20 @@
 /**
- * MediKiosk TypeScript Shared Schemas (API Contract)
+ * MediKiosk Frontend TypeScript Schemas (API Contract)
  * PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
  *
- * 1:1 mirroring of canonical Pydantic models in backend/app/shared/schemas.py
+ * Mirrors the canonical Pydantic v2 schemas in shared/schemas/__init__.py
  */
 
-// =============================================================================
-// DEV 1 SCHEMAS (Conversation & Intelligence Track)
-// =============================================================================
+export type InputType = "voice_touch" | "choice" | "scale" | "yes_no" | "voice" | "tap";
 
-export type InputType = "voice_touch" | "choice" | "scale" | "yes_no";
+export interface RedFlagDetails {
+  event_id?: string;
+  severity: "red" | "amber";
+  category: string;
+  trigger_phrase?: string;
+  matched_rule?: string;
+  [key: string]: any;
+}
 
 export interface NextQuestion {
   question_id: string;
@@ -19,13 +24,12 @@ export interface NextQuestion {
   options?: string[] | null;
   section: string;
   progress_pct: number;
-  is_red_flag_warning?: boolean;
-  red_flag_details?: {
-    event_id?: string;
-    severity?: "red" | "amber";
+  is_red_flag_warning: boolean;
+  red_flag_details?: RedFlagDetails | null;
+  metadata?: {
+    socrates_axis?: string;
     category?: string;
-    trigger_phrase?: string;
-    matched_rule?: string;
+    [key: string]: any;
   } | null;
 }
 
@@ -35,7 +39,7 @@ export interface InterviewAnswer {
   answer_option?: string | null;
   verbatim_voice?: string | null;
   language: string;
-  timestamp: string; // ISO-8601 UTC
+  timestamp?: string;
 }
 
 export interface SummarySource {
@@ -45,19 +49,13 @@ export interface SummarySource {
   bbox_crop_url?: string | null;
 }
 
-export type VerificationStatus =
-  | "patient_reported"
-  | "document_extracted"
-  | "needs_confirmation"
-  | "conflicting";
-
 export interface SummaryField {
   field_id: string;
-  section: string;
+  section: "chief_complaint" | "hpi" | "pmh" | "medications" | "allergies" | "ros" | "family_personal" | string;
   content: string;
   sources: SummarySource[];
-  verification: VerificationStatus;
-  changed_since_last?: boolean;
+  verification: "patient_reported" | "document_extracted" | "needs_confirmation" | "conflicting";
+  changed_since_last: boolean;
 }
 
 export interface RedFlagEvent {
@@ -72,27 +70,15 @@ export interface RedFlagEvent {
   dismiss_reason?: string | null;
 }
 
-// =============================================================================
-// DEV 2 SCHEMAS (Documents, Data & Infrastructure Track)
-// =============================================================================
-
-export type EntityType =
-  | "diagnosis"
-  | "medication"
-  | "lab_value"
-  | "allergy"
-  | "procedure"
-  | "vital";
-
+// Dev 2 placeholder shapes
 export interface ExtractedEntity {
   entity_id: string;
-  type: EntityType;
+  type: string;
   value: string;
-  generic_name?: string | null;
   date?: string | null;
   source_document_id?: string | null;
-  bounding_box?: [number, number, number, number] | null; // [x, y, w, h] normalized (0.0 to 1.0)
-  confidence: number;
+  bounding_box?: number[] | null;
+  confidence?: number;
   unit?: string | null;
   reference_range?: string | null;
   is_abnormal?: boolean | null;
@@ -103,39 +89,6 @@ export interface FHIRBundlePayload {
   encounter_id: string;
   summary_fields: SummaryField[];
   consent_ref: string;
-  generated_at: string;
-  raw_fhir_json?: Record<string, unknown> | null;
-}
-
-export interface PatientDemographics {
-  abha_id: string;
-  abha_number?: string | null;
-  name: string;
-  gender: "M" | "F" | "O";
-  dob: string;
-  mobile?: string | null;
-  address?: string | null;
-  district?: string | null;
-  state?: string | null;
-  photo_url?: string | null;
-  is_verified: boolean;
-}
-
-export interface ABHASession {
-  session_id: string;
-  abha_id: string;
-  auth_token: string;
-  patient: PatientDemographics;
-  expires_at: string;
-}
-
-export interface OTPRequest {
-  identifier: string;
-  auth_mode?: "MOBILE_OTP" | "AADHAAR_OTP" | "DEMOGRAPHICS";
-}
-
-export interface OTPVerify {
-  txn_id: string;
-  otp: string;
-  abha_id: string;
+  generated_at?: string;
+  raw_fhir_json?: Record<string, any> | null;
 }
