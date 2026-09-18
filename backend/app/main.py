@@ -14,8 +14,10 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.db.database import init_db
+from app.routes.fhir import router as fhir_router
 from app.routes.interview import router as interview_router
 from app.routes.session import router as session_router
+from app.routes.summary import router as summary_router
 from app.services.asr import transcribe
 from app.services.tts import synthesize
 
@@ -58,6 +60,8 @@ app.add_middleware(
 # Mount Routes
 app.include_router(interview_router)
 app.include_router(session_router)
+app.include_router(summary_router)
+app.include_router(fhir_router)
 
 
 @app.get("/health", tags=["System"])

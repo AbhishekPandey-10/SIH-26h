@@ -186,6 +186,7 @@ class ClinicalSummary(Base):
     allergies_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     family_personal_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     ros_json: Mapped[Dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    fields_json: Mapped[List[Dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
     doctor_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -221,3 +222,28 @@ class RedFlagEventModel(Base):
     dismissed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     dismiss_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class FHIRPushQueue(Base):
+    """
+    Queue for failed or retryable ABDM FHIR bundle pushes.
+    """
+    __tablename__ = "fhir_push_queue"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    bundle_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)  # pending, failed, pushed
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False
+    )

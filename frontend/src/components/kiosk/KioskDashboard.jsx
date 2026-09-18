@@ -1,10 +1,36 @@
-import React from 'react';
+import React, { useState } from 'react';
 import KioskCard from './KioskCard';
 import KioskButton from './KioskButton';
 import { useSession } from '../../contexts/SessionContext';
+import { InterviewScreen } from '../interview/InterviewScreen';
 
 export const KioskDashboard = () => {
   const { session, patient, language, endSession } = useSession();
+  const [showInterview, setShowInterview] = useState(false);
+
+  if (showInterview) {
+    return (
+      <div style={{ width: '100%', maxWidth: '900px', margin: '0 auto', padding: '24px 20px' }}>
+        <button
+          onClick={() => setShowInterview(false)}
+          style={{
+            marginBottom: '16px',
+            background: 'var(--color-surface-secondary)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            color: 'var(--color-text-primary)',
+            padding: '10px 18px',
+            borderRadius: '10px',
+            cursor: 'pointer',
+            fontWeight: 600,
+            fontSize: '14px',
+          }}
+        >
+          ← डैशबोर्ड पर लौटें (Back to Dashboard)
+        </button>
+        <InterviewScreen sessionId={session?.session_id || "dev-test-001"} language={language} />
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -85,7 +111,7 @@ export const KioskDashboard = () => {
             justifyContent: 'space-between',
             cursor: 'pointer',
           }}
-          onClick={() => alert(`Dev 1 LangGraph WebSocket endpoint ready at ws://localhost:8000/ws/interview with session_id: ${session?.session_id}`)}
+          onClick={() => setShowInterview(true)}
         >
           <div>
             <div style={{ fontSize: '32px', marginBottom: '12px' }}>🎙️</div>
