@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     DATA_DIR: Path = Path(__file__).resolve().parent.parent / "data"
+    UPLOAD_DIR: Path = Path(__file__).resolve().parent.parent / "uploads"
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),

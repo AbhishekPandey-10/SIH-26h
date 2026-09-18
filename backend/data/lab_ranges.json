@@ -1,0 +1,52 @@
+{
+  "hemoglobin": {
+    "aliases": ["hb", "haemoglobin", "hgb"],
+    "male": { "low": 13.0, "high": 17.0, "unit": "g/dL" },
+    "female": { "low": 12.0, "high": 15.5, "unit": "g/dL" },
+    "default": { "low": 12.0, "high": 17.0, "unit": "g/dL" }
+  },
+  "hba1c": {
+    "aliases": ["glycated hemoglobin", "glycosylated hemoglobin", "a1c"],
+    "normal": { "low": 0.0, "high": 5.7, "unit": "%" },
+    "prediabetes": { "low": 5.7, "high": 6.5, "unit": "%" },
+    "diabetic": { "low": 6.5, "high": 20.0, "unit": "%" },
+    "default": { "low": 4.0, "high": 5.7, "unit": "%" }
+  },
+  "creatinine": {
+    "aliases": ["serum creatinine", "sr creatinine", "creat"],
+    "male": { "low": 0.7, "high": 1.3, "unit": "mg/dL" },
+    "female": { "low": 0.6, "high": 1.1, "unit": "mg/dL" },
+    "default": { "low": 0.6, "high": 1.3, "unit": "mg/dL" }
+  },
+  "sgpt_alt": {
+    "aliases": ["alt", "sgpt", "alanine aminotransferase", "alanine transaminase"],
+    "normal": { "low": 0.0, "high": 40.0, "unit": "U/L" },
+    "default": { "low": 0.0, "high": 40.0, "unit": "U/L" }
+  },
+  "sgot_ast": {
+    "aliases": ["ast", "sgot", "aspartate aminotransferase"],
+    "normal": { "low": 0.0, "high": 40.0, "unit": "U/L" },
+    "default": { "low": 0.0, "high": 40.0, "unit": "U/L" }
+  },
+  "total_leukocyte_count": {
+    "aliases": ["tlc", "wbc", "total wbc", "white blood cell count"],
+    "normal": { "low": 4000.0, "high": 11000.0, "unit": "/cumm" },
+    "default": { "low": 4000.0, "high": 11000.0, "unit": "/cumm" }
+  },
+  "platelets": {
+    "aliases": ["platelet count", "plt"],
+    "normal": { "low": 150000.0, "high": 450000.0, "unit": "/cumm" },
+    "default": { "low": 150000.0, "high": 450000.0, "unit": "/cumm" }
+  },
+  "fasting_blood_sugar": {
+    "aliases": ["fbs", "fasting glucose", "blood glucose fasting"],
+    "normal": { "low": 70.0, "high": 100.0, "unit": "mg/dL" },
+    "prediabetes": { "low": 100.0, "high": 125.0, "unit": "mg/dL" },
+    "default": { "low": 70.0, "high": 100.0, "unit": "mg/dL" }
+  },
+  "total_bilirubin": {
+    "aliases": ["bilirubin total", "serum bilirubin"],
+    "normal": { "low": 0.2, "high": 1.2, "unit": "mg/dL" },
+    "default": { "low": 0.2, "high": 1.2, "unit": "mg/dL" }
+  }
+}

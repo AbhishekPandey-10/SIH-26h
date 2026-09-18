@@ -82,3 +82,30 @@ async def push_fhir_bundle_endpoint(
     except Exception as e:
         logger.error(f"Error in FHIR push: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/preview/{session_id}")
+async def get_fhir_preview_endpoint(
+    session_id: str,
+    patient_abha_id: str = "rajesh.kumar@abdm",
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /api/fhir/preview/{session_id}
+    Builds and returns the FHIR R4 Bundle JSON preview without pushing to ABDM gateway.
+    """
+    stmt = select(ClinicalSummary).where(ClinicalSummary.session_id == session_id)
+    res = await db.execute(stmt)
+    summary_row = res.scalar_one_or_none()
+
+    if summary_row and summary_row.fields_json:
+        fields = [SummaryField.model_validate(f) for f in summary_row.fields_json]
+    else:
+        fields = await summary_generator.generate_summary(session_id, db)
+
+    bundle = fhir_builder.build_bundle(
+        session_id=session_id,
+        summary_fields=fields,
+        patient_abha_id=patient_abha_id,
+    )
+    return bundle

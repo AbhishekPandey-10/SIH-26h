@@ -18,6 +18,13 @@ def client():
         yield test_client
 
 
+@pytest.fixture(autouse=True)
+async def init_test_db():
+    """Ensure all tables are created before running tests."""
+    from app.db.database import init_db
+    await init_db()
+
+
 @pytest.fixture
 def mock_gemini():
     """

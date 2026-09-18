@@ -81,21 +81,42 @@ class Session(Base):
 
 class ConsentAudit(Base):
     """
-    Granular audit log of patient consent agreements.
+    Granular, append-only audit log of patient consent agreements.
+    Target schema per PS ID26047 Dev 2 specification:
+      id UUID PRIMARY KEY,
+      session_id UUID REFERENCES sessions(id),
+      action VARCHAR(50) NOT NULL,
+      granted BOOLEAN NOT NULL,
+      voice_confirmation_ref TEXT,
+      timestamp TIMESTAMPTZ DEFAULT NOW(),
+      ip_address INET / String(45)
     """
     __tablename__ = "consent_audit"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    patient_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    consent_type: Mapped[str] = mapped_column(String(64), nullable=False)  # abha_data_pull, voice_recording
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)  # share_doctor, store_abdm, anonymized_research
     granted: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    voice_confirmation_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         nullable=False
     )
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+
+
+from sqlalchemy import event  # noqa: E402
+
+
+@event.listens_for(ConsentAudit, "before_update")
+def _prevent_consent_audit_update(mapper, connection, target):
+    raise ValueError("ConsentAudit table is append-only. UPDATE operations are strictly prohibited.")
+
+
+@event.listens_for(ConsentAudit, "before_delete")
+def _prevent_consent_audit_delete(mapper, connection, target):
+    raise ValueError("ConsentAudit table is append-only. DELETE operations are strictly prohibited.")
 
 
 class Document(Base):
@@ -135,6 +156,15 @@ class ExtractedEntityModel(Base):
     unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
     reference_range: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_abnormal: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+
+    @property
+    def extracted_date(self) -> str | None:
+        return self.date
 
 
 # ==============================================================================

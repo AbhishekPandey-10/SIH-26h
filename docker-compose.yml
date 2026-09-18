@@ -15,7 +15,8 @@ services:
       - ./backend/data:/app/data
       - ./backend/uploads:/app/uploads
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - ENVIRONMENT=development
       - DEBUG=true

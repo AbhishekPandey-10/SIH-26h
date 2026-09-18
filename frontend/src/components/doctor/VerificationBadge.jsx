@@ -41,15 +41,25 @@ export const STATUS_CONFIG = {
     border: 'rgba(220, 38, 38, 0.4)',
     icon: '⚡',
   },
+  doctor_edited: {
+    label: 'डॉक्टर द्वारा संपादित (Doctor-edited)',
+    short: 'Doctor-edited',
+    color: '#9333EA',
+    bg: 'rgba(147, 51, 234, 0.12)',
+    border: 'rgba(147, 51, 234, 0.4)',
+    icon: '✍️',
+  },
 };
 
 export const VerificationBadge = ({
   status = 'patient_reported',
+  sourceCount = 0,
   onClick = null,
   compact = false,
   className = '',
 }) => {
   const config = STATUS_CONFIG[status] || STATUS_CONFIG.patient_reported;
+  const tooltipText = `${config.label}${sourceCount > 0 ? ` • ${sourceCount} verified source citation(s)` : ''}`;
 
   return (
     <span
@@ -59,20 +69,33 @@ export const VerificationBadge = ({
         display: 'inline-flex',
         alignItems: 'center',
         gap: '6px',
-        padding: compact ? '4px 10px' : '6px 14px',
-        borderRadius: 'var(--border-radius-pill)',
+        padding: compact ? '3px 8px' : '5px 12px',
+        borderRadius: '20px',
         background: config.bg,
         border: `1px solid ${config.border}`,
         color: config.color,
-        fontSize: compact ? '12px' : '14px',
-        fontWeight: 600,
+        fontSize: compact ? '11px' : '13px',
+        fontWeight: 700,
         cursor: onClick ? 'pointer' : 'default',
-        transition: 'all var(--transition-fast)',
+        transition: 'all 0.15s ease',
       }}
-      title={config.label}
+      title={tooltipText}
     >
       <span style={{ fontSize: '13px' }}>{config.icon}</span>
       <span>{compact ? config.short : config.label}</span>
+      {sourceCount > 0 && (
+        <span
+          style={{
+            fontSize: '10px',
+            opacity: 0.85,
+            background: 'rgba(0,0,0,0.1)',
+            padding: '1px 5px',
+            borderRadius: '10px',
+          }}
+        >
+          {sourceCount} src
+        </span>
+      )}
     </span>
   );
 };

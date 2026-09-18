@@ -49,12 +49,20 @@ export interface SummarySource {
   bbox_crop_url?: string | null;
 }
 
+export type VerificationStatus =
+  | "patient_reported"
+  | "document_extracted"
+  | "needs_confirmation"
+  | "conflicting"
+  | "doctor_edited";
+
 export interface SummaryField {
   field_id: string;
   section: "chief_complaint" | "hpi" | "pmh" | "medications" | "allergies" | "ros" | "family_personal" | string;
   content: string;
+  original_content?: string | null;
   sources: SummarySource[];
-  verification: "patient_reported" | "document_extracted" | "needs_confirmation" | "conflicting";
+  verification: VerificationStatus;
   changed_since_last: boolean;
 }
 

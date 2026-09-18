@@ -104,7 +104,8 @@ class SummaryField(BaseModel):
         "patient_reported",
         "document_extracted",
         "needs_confirmation",
-        "conflicting"
+        "conflicting",
+        "doctor_edited",
     ] = Field(
         default="patient_reported",
         description="Trust & provenance badge for doctor review"

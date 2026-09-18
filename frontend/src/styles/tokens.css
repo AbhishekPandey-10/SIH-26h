@@ -1,56 +1,71 @@
 /* ==============================================================================
    MediKiosk Design System Tokens
    PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
+   High-Contrast Medical White & Tactile Kiosk Design System
    ============================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700;800&family=Noto+Sans+Gurmukhi:wght@400;500;600;700;800&family=Noto+Sans+Oriya:wght@400;600;700&family=Noto+Sans+Arabic:wght@400;600;700&display=swap');
 
 :root {
-  /* State colors */
+  /* Clinical State Colors (High-Contrast Solid Tokens) */
   --color-red-flag: #DC2626;
-  --color-amber-warning: #F59E0B;
-  --color-green-safe: #10B981;
-  --color-blue-info: #3B82F6;
+  --color-amber-warning: #D97706;
+  --color-green-safe: #059669;
+  --color-blue-info: #0284C7;
 
-  /* Verification badge colors */
-  --color-patient-reported: #3B82F6;     /* blue */
-  --color-document-extracted: #10B981;   /* green */
-  --color-needs-confirmation: #F59E0B;   /* amber */
-  --color-conflicting: #DC2626;          /* red */
+  /* Verification Badge Colors */
+  --color-patient-reported: #0284C7;     /* Solid Medical Cyan/Blue */
+  --color-document-extracted: #059669;   /* Solid Medical Emerald */
+  --color-needs-confirmation: #D97706;   /* Solid Medical Amber */
+  --color-conflicting: #DC2626;          /* Solid Medical Crimson */
 
-  /* Surface colors (dark kiosk theme) */
-  --color-surface-primary: #0F172A;
-  --color-surface-secondary: #1E293B;
-  --color-surface-elevated: #334155;
-  --color-surface-hover: #475569;
-  --color-surface-glass: rgba(30, 41, 59, 0.75);
+  /* High-Contrast Clinical White & Light Surfaces */
+  --color-surface-primary: #F8FAFC;       /* Clean Canvas Background */
+  --color-surface-card: #FFFFFF;          /* Pure White Cards */
+  --color-surface-secondary: #FFFFFF;     /* Header & Main Cards */
+  --color-surface-elevated: #F1F5F9;      /* Subtle Neutral Grey Container */
+  --color-surface-hover: #E2E8F0;         /* Touch / Hover Highlight */
+  --color-surface-glass: rgba(255, 255, 255, 0.95);
 
-  /* Text & Accents */
-  --color-text-primary: #F8FAFC;
-  --color-text-secondary: #94A3B8;
-  --color-text-muted: #64748B;
-  --color-accent-teal: #06B6D4;
-  --color-accent-purple: #8B5CF6;
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-focused: rgba(59, 130, 246, 0.6);
+  /* High-Contrast Typography (WCAG AAA Compliance) */
+  --color-text-primary: #0F172A;          /* Slate 900 Deep Ink (Maximum Contrast) */
+  --color-text-secondary: #1E293B;        /* Slate 800 High Legibility (Darkened) */
+  --color-text-muted: #475569;            /* Slate 600 Clear Captions */
+  --color-text-inverse: #FFFFFF;          /* Pure White on Solid Buttons */
 
-  /* Kiosk-specific ergonomics */
-  --touch-target-min: 48px;
+  /* Action Buttons (Solid Vibrant Colors — No Muddy Gradients) */
+  --color-action-primary: #059669;        /* Vibrant Emerald for Proceed / Start / Confirm */
+  --color-action-primary-hover: #047857;
+  --color-action-danger: #DC2626;         /* Clear Crimson for Stop / Cancel / Wipe */
+  --color-action-danger-hover: #B91C1C;
+  --color-action-info: #0284C7;           /* Clear Cobalt for Information / Selection */
+  --color-action-info-hover: #0369A1;
+
+  /* Crisp Borders */
+  --color-border-subtle: #E2E8F0;         /* Slate 200 Card Border */
+  --color-border-strong: #CBD5E1;         /* Slate 300 Input & Keypad Border */
+  --color-border-focused: #059669;        /* Emerald Focus Ring */
+
+  /* Kiosk Ergonomics for Elderly & Non-Tech Users */
+  --touch-target-min: 56px;
   --border-radius-card: 16px;
   --border-radius-pill: 9999px;
-  --border-radius-button: 12px;
-  --font-family: 'Inter', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --border-radius-button: 14px;
+  --kiosk-font-scale: 1;
+  --font-family: 'Inter', 'Noto Sans Devanagari', 'Noto Sans Gurmukhi', 'Noto Sans Oriya', 'Noto Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 
-  /* Shadow & Depth */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
-  --shadow-glow-blue: 0 0 20px rgba(59, 130, 246, 0.35);
-  --shadow-glow-red: 0 0 25px rgba(220, 38, 38, 0.4);
+  /* Crisp Drop Shadows */
+  --shadow-sm: 0 1px 3px 0 rgba(15, 23, 42, 0.06), 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 10px -1px rgba(15, 23, 42, 0.08), 0 2px 6px -2px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 12px 28px -4px rgba(15, 23, 42, 0.1), 0 4px 10px -4px rgba(15, 23, 42, 0.05);
+  --shadow-card: 0 4px 16px 0 rgba(15, 23, 42, 0.06), 0 1px 4px 0 rgba(15, 23, 42, 0.04);
+  --shadow-glow-blue: 0 0 0 3px rgba(2, 132, 199, 0.25);
+  --shadow-glow-green: 0 0 0 4px rgba(5, 150, 105, 0.25);
+  --shadow-glow-red: 0 0 0 4px rgba(220, 38, 38, 0.25);
 
   /* Transitions */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-bounce: 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-bounce: 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* Base resets & typography */
@@ -69,4 +84,48 @@ body {
   line-height: 1.5;
   overflow-x: hidden;
   touch-action: manipulation;
+}
+
+/* Accessibility: Large Text Scale Mode */
+body.kiosk-large-text {
+  font-size: 115%;
+}
+body.kiosk-large-text h1 {
+  font-size: 38px !important;
+}
+body.kiosk-large-text h2 {
+  font-size: 30px !important;
+}
+body.kiosk-large-text h3 {
+  font-size: 24px !important;
+}
+body.kiosk-large-text button,
+body.kiosk-large-text input {
+  font-size: 20px !important;
+}
+
+/* Accessibility: High Contrast Yellow/Black Medical Mode */
+body.kiosk-high-contrast {
+  --color-surface-primary: #000000 !important;
+  --color-surface-card: #0F172A !important;
+  --color-surface-secondary: #000000 !important;
+  --color-surface-elevated: #1E293B !important;
+  --color-text-primary: #FFFFFF !important;
+  --color-text-secondary: #FDE047 !important;
+  --color-text-muted: #E2E8F0 !important;
+  --color-border-subtle: #475569 !important;
+  --color-border-strong: #FDE047 !important;
+  --color-action-primary: #10B981 !important;
+  background-color: #000000 !important;
+  color: #FFFFFF !important;
+}
+body.kiosk-high-contrast .kiosk-card {
+  background: #0F172A !important;
+  border-color: #FDE047 !important;
+  color: #FFFFFF !important;
+}
+body.kiosk-high-contrast header,
+body.kiosk-high-contrast footer {
+  background: #000000 !important;
+  border-color: #FDE047 !important;
 }
