@@ -193,6 +193,7 @@ class PolypharmacyDetector:
                         note=note,
                         message=msg,
                     )
+                )
         # 3. Populate unified alerts list for Doctor UI and Checkpoint 3 integration
         for d in report.duplicates:
             report.alerts.append({
