@@ -8,7 +8,7 @@ import IdleTimeoutOverlay from '../components/kiosk/IdleTimeoutOverlay';
 import VerificationBadge from '../components/doctor/VerificationBadge';
 import useIdleTimeout from '../hooks/useIdleTimeout';
 
-export const DesignSystemShowcase = () => {
+export const DesignSystemShowcase = ({ onBack }) => {
   const [selectedLang, setSelectedLang] = useState('hi');
   const [isConsentOpen, setIsConsentOpen] = useState(false);
   const [progressVal, setProgressVal] = useState(45);
@@ -82,6 +82,15 @@ export const DesignSystemShowcase = () => {
         </div>
 
         <div style={{ display: 'flex', gap: '12px' }}>
+          {onBack && (
+            <KioskButton
+              variant="secondary"
+              size="md"
+              onClick={onBack}
+            >
+              ← Back to Live Kiosk Flow
+            </KioskButton>
+          )}
           <KioskButton
             variant={fullscreenActive ? 'secondary' : 'primary'}
             size="md"

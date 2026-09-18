@@ -92,3 +92,17 @@ export interface FHIRBundlePayload {
   generated_at?: string;
   raw_fhir_json?: Record<string, any> | null;
 }
+
+export interface SessionStartResponse {
+  session_id: string;
+  patient_name: string;
+  language: string;
+  abha_id?: string | null;
+  status: string;
+}
+
+export interface ConsentActionItem {
+  action: string;
+  granted: boolean;
+}
+
