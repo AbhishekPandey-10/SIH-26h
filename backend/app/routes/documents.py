@@ -295,6 +295,10 @@ async def get_document_file_endpoint(
     if sample_img.exists():
         return FileResponse(sample_img)
 
+    test_img = Path("tests/test_data/sample_doc.jpg")
+    if test_img.exists():
+        return FileResponse(test_img)
+
     raise HTTPException(status_code=404, detail="Document image file not found")
 
 

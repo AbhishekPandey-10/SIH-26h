@@ -12,6 +12,7 @@ Endpoints:
 
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -198,14 +199,96 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                     f"EMERGENCY RED FLAG: session {active_session_id}: "
                     f"{red_flag.trigger_phrase} ({red_flag.category})"
                 )
+
+                # 1. Pause interview state
+                current_state["is_paused"] = True
+                current_state["paused_reason"] = "red_flag"
+
+                # 2. Calm reassurance message in patient's language
+                calm_msg_en = "We're making sure you get the right care quickly. A staff member has been notified. Please stay comfortable."
+                calm_msg_hi = "हम यह सुनिश्चित कर रहे हैं कि आपको तुरंत उचित देखभाल मिले। अस्पताल स्टाफ को सूचित कर दिया गया है। कृपया आराम से बैठें।"
+                calm_message = calm_msg_hi if active_language == "hi" else calm_msg_en
+
+                # 3. Kiosk pause payload
+                pause_payload = {
+                    "event": "red_flag_triggered",
+                    "is_paused": True,
+                    "message": calm_message,
+                    "calm_reassurance": calm_message,
+                    "data": red_flag.model_dump(mode="json"),
+                }
+                await websocket.send_text(json.dumps(pause_payload, ensure_ascii=False))
+
+                # 4. Broadcast red_flag_alert to staff channel
+                staff_alert = {
+                    "event": "red_flag_alert",
+                    "data": {
+                        "event_id": red_flag.event_id,
+                        "patient_name": "मरीज (Patient)",
+                        "kiosk_id": settings.KIOSK_ID,
+                        "trigger_phrase": red_flag.trigger_phrase,
+                        "severity": red_flag.severity,
+                        "category": red_flag.category,
+                        "session_id": active_session_id,
+                        "timestamp": red_flag.timestamp.isoformat() if hasattr(red_flag.timestamp, "isoformat") else str(red_flag.timestamp),
+                    },
+                }
+                await staff_manager.broadcast_alert(staff_alert)
+
+                # Persist emergency event to DB
                 try:
-                    alert_payload = {
-                        "event": "red_flag_triggered",
-                        "data": red_flag.model_dump(mode="json")
-                    }
-                    await websocket.send_text(json.dumps(alert_payload))
+                    async with async_session_factory() as db:
+                        db.add(
+                            RedFlagEventModel(
+                                id=red_flag.event_id,
+                                session_id=active_session_id,
+                                trigger_phrase=red_flag.trigger_phrase,
+                                matched_rule=red_flag.matched_rule,
+                                severity=red_flag.severity,
+                                category=red_flag.category,
+                                timestamp=red_flag.timestamp,
+                            )
+                        )
+                        await db.commit()
+                except Exception as db_err:
+                    logger.error(f"Error persisting red-flag event: {db_err}")
+
+                try:
+                    from app.routes.red_flag import staff_alert_manager
+                    await staff_alert_manager.broadcast_alert(red_flag.model_dump(mode="json"))
                 except Exception as e:
-                    logger.error(f"Failed to emit red_flag_triggered event: {e}")
+                    logger.debug(f"Red flag broadcast to alternative manager: {e}")
+
+                # Send emergency pause NextQuestion
+                paused_q = NextQuestion(
+                    question_id=f"q_paused_{red_flag.event_id}",
+                    text=calm_message,
+                    input_type="voice_touch",
+                    section="emergency_hold",
+                    progress_pct=current_state.get("progress_pct", 50.0),
+                    is_red_flag_warning=True,
+                    red_flag_details={
+                        "event_id": red_flag.event_id,
+                        "severity": red_flag.severity,
+                        "category": red_flag.category,
+                        "trigger_phrase": red_flag.trigger_phrase,
+                        "matched_rule": red_flag.matched_rule,
+                    },
+                )
+                await websocket.send_text(paused_q.model_dump_json())
+                continue
+
+            # If interview is currently paused, do not advance
+            if current_state.get("is_paused") and current_state.get("next_question"):
+                calm_msg = (
+                    "कृपया आराम से बैठें। अस्पताल स्टाफ को सूचित कर दिया गया है।"
+                    if active_language == "hi"
+                    else "Please stay comfortable. Staff has been notified."
+                )
+                await websocket.send_text(
+                    json.dumps({"event": "interview_paused", "message": calm_msg}, ensure_ascii=False)
+                )
+                continue
 
             # Advance LangGraph state machine
             next_q: NextQuestion = interview_engine.step(
@@ -353,7 +436,7 @@ async def dismiss_red_flag_endpoint(
     )
 
     logger.info(f"Red flag {event_id} dismissed by {req.dismissed_by}; resumed interview for {event_row.session_id}")
-    return {"success": True, "event_id": event_id, "status": "dismissed"}
+    return {"success": True, "event_id": event_id, "status": "dismissed", "dismissed_by": req.dismissed_by}
 
 
 @router.post("/api/red-flag/{event_id}/acknowledge")

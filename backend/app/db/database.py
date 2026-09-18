@@ -47,4 +47,14 @@ async def init_db() -> None:
     """Create tables if they don't exist (useful for testing and dev)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        for col_def in [
+            "ALTER TABLE red_flag_events ADD COLUMN acknowledged_by VARCHAR(64)",
+            "ALTER TABLE red_flag_events ADD COLUMN action_taken TEXT",
+            "ALTER TABLE red_flag_events ADD COLUMN is_acknowledged BOOLEAN DEFAULT 0",
+        ]:
+            try:
+                await conn.execute(text(col_def))
+            except Exception:
+                pass
     logger.info("Dev 1 tables initialized in database.")

@@ -166,18 +166,26 @@ def test_integration_checkpoint_3_all_four_flows():
         assert red_flag_data["category"] == "cardiac"
         event_id = red_flag_data.get("event_id") or red_flag_data.get("id")
 
-    # Staff dismisses red flag via REST
-    dismiss_resp = client.post(
-        f"/api/red-flag/{event_id}/dismiss",
-        json={
-            "dismissed_by": "triage_nurse_priya",
-            "reason": "ECG performed at triage; non-STEMI cleared; patient stable.",
-        },
-    )
-    assert dismiss_resp.status_code == 200
-    dismiss_data = dismiss_resp.json()
-    assert dismiss_data["status"] == "dismissed"
-    assert dismiss_data["dismissed_by"] == "triage_nurse_priya"
+        # Emergency hold question
+        hold_q = ws.receive_json()
+        assert hold_q.get("section") == "emergency_hold" or hold_q.get("is_red_flag_warning") is True
+
+        # Staff dismisses red flag via REST
+        dismiss_resp = client.post(
+            f"/api/red-flag/{event_id}/dismiss",
+            json={
+                "dismissed_by": "triage_nurse_priya",
+                "reason": "ECG performed at triage; non-STEMI cleared; patient stable.",
+            },
+        )
+        assert dismiss_resp.status_code == 200
+        dismiss_data = dismiss_resp.json()
+        assert dismiss_data["status"] == "dismissed"
+        assert dismiss_data["dismissed_by"] == "triage_nurse_priya"
+
+        # Kiosk receives resume notification
+        resume_event = ws.receive_json()
+        assert resume_event.get("event") == "interview_resume"
 
     # Verify in DB
     async def verify_red_flag_db():
