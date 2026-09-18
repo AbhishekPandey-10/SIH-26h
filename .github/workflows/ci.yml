@@ -1,0 +1,41 @@
+name: Dev 1 CI Pipeline
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  backend-test:
+    name: Backend Lint, Typecheck & Test
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.8.19"
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install Dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Run Ruff Lint
+        run: ruff check app tests
+
+      - name: Run mypy Type Check
+        run: mypy app tests --ignore-missing-imports
+
+      - name: Run Pytest Suite
+        run: pytest -v --tb=short

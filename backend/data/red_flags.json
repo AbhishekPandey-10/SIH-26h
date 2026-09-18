@@ -1,0 +1,258 @@
+[
+  {
+    "id": "RF-CARD-001",
+    "trigger": "chest pain with breathlessness",
+    "severity": "red",
+    "category": "cardiac",
+    "description": "Suspected acute coronary syndrome / myocardial infarction",
+    "keywords": ["chest pain with breathlessness", "chest pain and shortness of breath", "chhati me dard aur saans fulna", "seene mein dard aur saans fulna"]
+  },
+  {
+    "id": "RF-CARD-002",
+    "trigger": "crushing chest pressure radiating to arm or jaw",
+    "severity": "red",
+    "category": "cardiac",
+    "description": "Classic angina or acute myocardial infarction presentation",
+    "keywords": ["crushing chest pressure", "chest pain left arm", "chest pain jaw", "heavy pressure on chest"]
+  },
+  {
+    "id": "RF-CARD-003",
+    "trigger": "sudden severe palpitation with dizziness and collapse",
+    "severity": "red",
+    "category": "cardiac",
+    "description": "Suspected ventricular tachycardia or hemodynamically unstable arrhythmia",
+    "keywords": ["palpitation with dizziness", "heart racing and fainted", "behoshi aur dil ki dhadkan"]
+  },
+  {
+    "id": "RF-STROKE-001",
+    "trigger": "sudden weakness one side",
+    "severity": "red",
+    "category": "stroke",
+    "description": "Acute focal neurological deficit / suspected acute ischemic or hemorrhagic stroke",
+    "keywords": ["sudden weakness one side", "one side paralysis", "ek taraf kamzori", "one side body numb"]
+  },
+  {
+    "id": "RF-STROKE-002",
+    "trigger": "facial droop with slurred speech",
+    "severity": "red",
+    "category": "stroke",
+    "description": "FAST stroke presentation requiring immediate thrombolysis window assessment",
+    "keywords": ["facial droop", "slurred speech", "unable to speak suddenly", "chehra tedha"]
+  },
+  {
+    "id": "RF-STROKE-003",
+    "trigger": "sudden worst headache of life",
+    "severity": "red",
+    "category": "stroke",
+    "description": "Thunderclap headache, suspected subarachnoid hemorrhage",
+    "keywords": ["worst headache of life", "thunderclap headache", "sudden explosive headache"]
+  },
+  {
+    "id": "RF-PSYCH-001",
+    "trigger": "suicidal thoughts",
+    "severity": "red",
+    "category": "psychiatric",
+    "description": "Active suicidal ideation or intent with imminent self-harm risk",
+    "keywords": ["suicidal thoughts", "want to end my life", "suicide", "marne ka man karta hai", "jeene ki ichha nahi"]
+  },
+  {
+    "id": "RF-PSYCH-002",
+    "trigger": "auditory hallucinations commanding self-harm or violence",
+    "severity": "red",
+    "category": "psychiatric",
+    "description": "Command hallucinations with potential for acute violence or self-injury",
+    "keywords": ["hearing voices telling to hurt", "command hallucinations", "voices in head"]
+  },
+  {
+    "id": "RF-ANAPH-001",
+    "trigger": "severe allergic reaction",
+    "severity": "red",
+    "category": "anaphylaxis",
+    "description": "Systemic anaphylaxis with impending airway compromise",
+    "keywords": ["severe allergic reaction", "anaphylaxis", "allergic shock", "severe allergy"]
+  },
+  {
+    "id": "RF-ANAPH-002",
+    "trigger": "swollen tongue or throat with difficulty breathing",
+    "severity": "red",
+    "category": "anaphylaxis",
+    "description": "Acute angioedema / upper airway obstruction",
+    "keywords": ["swollen tongue", "throat closing", "tongue swelling", "saans lene me gale me sujan"]
+  },
+  {
+    "id": "RF-RESP-001",
+    "trigger": "severe acute shortness of breath at rest",
+    "severity": "red",
+    "category": "respiratory",
+    "description": "Impending respiratory failure / acute severe asthma / pulmonary embolism",
+    "keywords": ["severe shortness of breath at rest", "gasping for air", "cannot breathe sitting", "saans nahi aa rahi"]
+  },
+  {
+    "id": "RF-RESP-002",
+    "trigger": "inability to speak in full sentences due to breathlessness",
+    "severity": "red",
+    "category": "respiratory",
+    "description": "Life-threatening asthma or severe COPD exacerbation",
+    "keywords": ["cannot speak full sentence", "single word speech", "gasping between words"]
+  },
+  {
+    "id": "RF-RESP-003",
+    "trigger": "coughing up massive bright red blood",
+    "severity": "red",
+    "category": "respiratory",
+    "description": "Massive hemoptysis (>100ml) risking airway asphyxiation",
+    "keywords": ["coughing up blood", "massive hemoptysis", "cough blood cupful", "khoon ki ulti saans se"]
+  },
+  {
+    "id": "RF-RESP-004",
+    "trigger": "noisy high pitched stridor sound while inhaling",
+    "severity": "red",
+    "category": "respiratory",
+    "description": "Critical foreign body or laryngeal obstruction",
+    "keywords": ["stridor", "high pitched breathing", "choking sound", "whistling inhalation"]
+  },
+  {
+    "id": "RF-OBST-001",
+    "trigger": "vaginal bleeding during late pregnancy",
+    "severity": "red",
+    "category": "obstetric",
+    "description": "Placenta previa or placental abruption / acute obstetric hemorrhage",
+    "keywords": ["vaginal bleeding pregnancy", "bleeding third trimester", "garbhavastha me khoon"]
+  },
+  {
+    "id": "RF-OBST-002",
+    "trigger": "pregnancy with severe headache, blurred vision and convulsions",
+    "severity": "red",
+    "category": "obstetric",
+    "description": "Eclampsia / severe pre-eclampsia requiring magnesium sulfate",
+    "keywords": ["pregnancy convulsion", "eclampsia", "fits in pregnancy", "pregnant severe headache blurred vision"]
+  },
+  {
+    "id": "RF-OBST-003",
+    "trigger": "cessation of fetal movements in third trimester",
+    "severity": "amber",
+    "category": "obstetric",
+    "description": "Intrauterine fetal distress",
+    "keywords": ["no baby movement", "decreased fetal movement", "bachha hil nahi raha"]
+  },
+  {
+    "id": "RF-PED-001",
+    "trigger": "infant unresponsive or lethargic and cannot wake up",
+    "severity": "red",
+    "category": "pediatric",
+    "description": "Imminent pediatric decompensation / encephalopathy",
+    "keywords": ["baby not waking up", "infant lethargic", "bachha behosh", "unresponsive child"]
+  },
+  {
+    "id": "RF-PED-002",
+    "trigger": "infant unable to feed or drink with chest indrawing",
+    "severity": "red",
+    "category": "pediatric",
+    "description": "WHO danger sign for severe pediatric pneumonia or sepsis",
+    "keywords": ["baby cannot feed", "chest indrawing", "chhati dhas rahi hai", "unable to suck milk"]
+  },
+  {
+    "id": "RF-PED-003",
+    "trigger": "fever with non-blanching purple spots on skin",
+    "severity": "red",
+    "category": "pediatric",
+    "description": "Suspected meningococcal septicemia / purpura fulminans",
+    "keywords": ["purple spots fever", "petechial rash", "meningitis rash", "lal baingani dhabbe"]
+  },
+  {
+    "id": "RF-SEPSIS-001",
+    "trigger": "high fever with confusion, rapid breathing and clammy skin",
+    "severity": "red",
+    "category": "sepsis",
+    "description": "qSOFA positive septic shock",
+    "keywords": ["fever with confusion", "septic shock", "cold clammy skin fever", "tez bukhar aur behoshi"]
+  },
+  {
+    "id": "RF-SEPSIS-002",
+    "trigger": "no urination for 24 hours with severe weakness",
+    "severity": "amber",
+    "category": "sepsis",
+    "description": "Acute kidney injury or severe volume depletion/shock",
+    "keywords": ["no urine 24 hours", "anuria", "peshab band hona", "no urination"]
+  },
+  {
+    "id": "RF-GI-001",
+    "trigger": "vomiting large amounts of coffee ground or fresh blood",
+    "severity": "red",
+    "category": "gastrointestinal",
+    "description": "Massive upper gastrointestinal bleeding (variceal or peptic)",
+    "keywords": ["vomiting blood", "coffee ground emesis", "hematemesis", "khoon ki ulti"]
+  },
+  {
+    "id": "RF-GI-002",
+    "trigger": "rigid board-like abdomen with severe unbearable pain",
+    "severity": "red",
+    "category": "gastrointestinal",
+    "description": "Perforated viscous / acute peritonitis surgical emergency",
+    "keywords": ["rigid abdomen", "board like belly", "peritonitis", "pet pathar jaisa"]
+  },
+  {
+    "id": "RF-GI-003",
+    "trigger": "black tarry foul-smelling stools with dizziness",
+    "severity": "amber",
+    "category": "gastrointestinal",
+    "description": "Melena indicating ongoing lower/upper GI bleed",
+    "keywords": ["black tarry stool", "melena", "kala pakhana", "black motion dizziness"]
+  },
+  {
+    "id": "RF-TRAUMA-001",
+    "trigger": "head injury with loss of consciousness and vomiting",
+    "severity": "red",
+    "category": "trauma",
+    "description": "Traumatic brain injury / epidural or subdural hematoma",
+    "keywords": ["head injury unconscious", "head injury vomiting", "sir par chot behosh"]
+  },
+  {
+    "id": "RF-TRAUMA-002",
+    "trigger": "penetrating trauma or deep stab wound to chest or abdomen",
+    "severity": "red",
+    "category": "trauma",
+    "description": "Penetrating torso trauma risking hemothorax/peritonitis",
+    "keywords": ["stab wound chest", "penetrating injury", "deep bleeding wound"]
+  },
+  {
+    "id": "RF-NEURO-001",
+    "trigger": "continuous active seizure lasting more than 5 minutes",
+    "severity": "red",
+    "category": "neurological",
+    "description": "Status epilepticus emergency",
+    "keywords": ["continuous seizure", "status epilepticus", "fits not stopping", "daura padna band nahi"]
+  },
+  {
+    "id": "RF-NEURO-002",
+    "trigger": "neck stiffness with high fever and sensitivity to light",
+    "severity": "red",
+    "category": "neurological",
+    "description": "Meningism / acute bacterial meningitis",
+    "keywords": ["stiff neck fever", "meningitis", "gardan akadna bukhar", "photophobia fever"]
+  },
+  {
+    "id": "RF-TOX-001",
+    "trigger": "ingestion of pesticide, poison or unknown chemicals",
+    "severity": "red",
+    "category": "toxicology",
+    "description": "Acute poisoning (e.g. organophosphate) requiring immediate atropinization",
+    "keywords": ["poison ingestion", "drank pesticide", "zeher khaa liya", "chemical swallowed"]
+  },
+  {
+    "id": "RF-OCU-001",
+    "trigger": "sudden painless loss of vision in one eye",
+    "severity": "red",
+    "category": "ophthalmic",
+    "description": "Central retinal artery occlusion ('eye stroke')",
+    "keywords": ["sudden loss of vision", "eye stroke", "aankh ki roshni chali gayi", "amaurosis fugax"]
+  },
+  {
+    "id": "RF-ENDO-001",
+    "trigger": "diabetic patient breathing heavily with fruity breath and confusion",
+    "severity": "red",
+    "category": "endocrine",
+    "description": "Diabetic Ketoacidosis (DKA)",
+    "keywords": ["diabetic fruity breath", "DKA", "sugar patient deep breathing confusion"]
+  }
+]
