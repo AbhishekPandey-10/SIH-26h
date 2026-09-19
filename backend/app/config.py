@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     DEFAULT_LANGUAGE: str = "hi"
     IDLE_TIMEOUT_SECONDS: int = 180
 
+    # Authentication & Access Control
+    STAFF_API_KEY: str = "medikiosk_staff_secret_token_2026"
+    KIOSK_API_KEY: str = "medikiosk_kiosk_secret_token_2026"
+    JWT_SECRET: str = "medikiosk_jwt_secret_dev_key"
+    ALLOW_DEMO_OTP: bool = True  # Disabled in production environment
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]

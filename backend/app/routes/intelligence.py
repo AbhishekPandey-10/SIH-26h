@@ -73,20 +73,23 @@ async def get_contradictions_endpoint(
 async def act_on_contradiction_endpoint(
     session_id: str,
     req: ContradictionActionRequest,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     POST /api/intelligence/contradictions/{session_id}/action
     Doctor action on a contradiction card:
     - 'confirm': marks as acknowledged, validates change
     - 'flag_error': keeps both values with a clinical warning badge
+    Persists decision to SummaryResolution so it survives refresh/restart.
     """
     if req.action not in ["confirm", "flag_error"]:
         raise HTTPException(status_code=400, detail="Action must be 'confirm' or 'flag_error'")
 
-    contradiction_detector.record_doctor_action(
+    await contradiction_detector.record_doctor_action(
         session_id=session_id,
         contradiction_id=req.contradiction_id,
         action="confirmed" if req.action == "confirm" else "flagged_error",
+        db=db,
     )
     return {
         "session_id": session_id,

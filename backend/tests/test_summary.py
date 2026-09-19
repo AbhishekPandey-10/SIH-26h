@@ -190,8 +190,11 @@ def test_fhir_bundle_generation():
     bundle = fhir_builder.build_bundle(
         session_id="test_fhir_sess_01",
         summary_fields=fields,
+        patient_id="patient-uuid-001",
         patient_abha_id="rajesh.kumar@abdm",
         encounter_id="enc_001",
+        summary_verified=True,
+        verified_by="doc_opd_01",
     )
 
     assert bundle["resourceType"] == "Bundle"
@@ -215,7 +218,37 @@ def test_fhir_bundle_generation():
 
 def test_post_summary_generate_endpoint():
     client = TestClient(app)
-    response = client.post("/api/summary/generate", json={"session_id": "dev-test-001"})
+    staff_headers = {"Authorization": "Bearer staff_doc_opd_01"}
+    session_id = f"test_sum_gen_{uuid.uuid4().hex[:8]}"
+
+    import asyncio
+    async def seed():
+        async with async_session_factory() as db:
+            from app.db.models import ConsentAudit, Session
+            db.add(Session(id=session_id, status="active", language="en"))
+            await db.flush()
+            db.add(ConsentAudit(session_id=session_id, action="share_doctor", granted=True))
+            db.add(
+                InterviewTranscript(
+                    session_id=session_id,
+                    turn_number=1,
+                    question_id="q_cc_01",
+                    question_text="Complaint?",
+                    answer_text="Knee pain",
+                    language="en",
+                    node_name="chief_complaint",
+                    speaker="patient",
+                    text="Knee pain",
+                )
+            )
+            await db.commit()
+    asyncio.run(seed())
+
+    response = client.post(
+        "/api/summary/generate",
+        json={"session_id": session_id},
+        headers=staff_headers,
+    )
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -226,26 +259,40 @@ def test_post_summary_generate_endpoint():
     assert "verification" in data[0]
 
 
-def test_post_fhir_push_endpoint():
+def test_post_fhir_export_requires_auth():
+    """POST /api/fhir/export requires staff authentication."""
     client = TestClient(app)
+    # Without auth → 401
     response = client.post(
-        "/api/fhir/push",
-        json={"session_id": "dev-test-001", "patient_abha_id": "rajesh.kumar@abdm"},
+        "/api/fhir/export",
+        json={"session_id": "dev-test-001"},
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert "success" in data
-    # Either successful sandbox push or stored in queue for retry
-    if data["success"]:
-        assert data["abdm_ref"] is not None
-    else:
-        assert data["queue_id"] is not None
-        assert "retry" in data.get("message", "").lower()
+    assert response.status_code == 401
+
+    # With staff auth but nonexistent session → 404
+    staff_headers = {"Authorization": "Bearer staff_doc_opd_01"}
+    response = client.post(
+        "/api/fhir/export",
+        json={"session_id": "dev-test-001"},
+        headers=staff_headers,
+    )
+    assert response.status_code == 404
 
 
 def test_ask_back_flow():
     client = TestClient(app)
-    session_id = "test_ask_back_sess_01"
+    session_id = f"test_ask_back_{uuid.uuid4().hex[:8]}"
+    staff_headers = {"Authorization": "Bearer staff_doc_opd_01"}
+
+    import asyncio
+    async def seed():
+        async with async_session_factory() as db:
+            from app.db.models import ConsentAudit, Session
+            db.add(Session(id=session_id, status="active", language="hi"))
+            await db.flush()
+            db.add(ConsentAudit(session_id=session_id, action="share_doctor", granted=True))
+            await db.commit()
+    asyncio.run(seed())
 
     # Call ask-back endpoint
     response = client.post(
@@ -256,6 +303,7 @@ def test_ask_back_flow():
             "question_text": "क्या आपको सीने में दर्द के साथ पसीना भी आ रहा है? (Any sweating with chest pain?)",
             "answer_text": "हाँ, हल्का पसीना आता है जब दर्द तेज होता है।",
         },
+        headers=staff_headers,
     )
     assert response.status_code == 200
     data = response.json()

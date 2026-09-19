@@ -19,7 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.database import get_db
 from app.db.models import Document, ExtractedEntityModel, Patient, Session
+from app.dependencies import check_effective_consent
+from app.services.abdm import SANDBOX_PATIENTS
 from app.services.document_processor import document_processor
+from app.services.session_manager import session_manager
 
 logger = logging.getLogger("medikiosk.routes.abdm")
 router = APIRouter(prefix="/api/abdm", tags=["ABDM Gateway"])
@@ -39,26 +42,11 @@ class ABDMFetchResponse(BaseModel):
     extracted_entities_count: int
 
 
-@router.post("/fetch-records", response_model=ABDMFetchResponse)
-async def fetch_abdm_records_endpoint(
-    req: ABDMFetchRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    POST /api/abdm/fetch-records
-    Retrieves health records linked to patient's ABHA ID from the ABDM sandbox gateway
-    and automatically triggers multimodal document extraction on all retrieved records.
-    """
-    logger.info(f"Initiating ABDM auto-fetch for ABHA: {req.abha_id}, Session: {req.session_id}")
-
-    # Ensure upload directory exists
-    upload_dir = Path(settings.DATA_DIR).parent / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    # Simulated sandbox medical records for the ABHA account
-    mock_sandbox_records = [
+# Pre-seeded sandbox medical records for authorized sandbox patient
+PATIENT_SANDBOX_RECORDS: Dict[str, List[Dict[str, Any]]] = {
+    "rajesh.kumar@abdm": [
         {
-            "doc_id": f"abdm_presc_{uuid.uuid4().hex[:8]}",
+            "doc_id_prefix": "abdm_presc",
             "file_type": "prescription",
             "title": "Cardiology OPD Prescription - AIIMS New Delhi",
             "date": "2026-03-10",
@@ -87,7 +75,7 @@ async def fetch_abdm_records_endpoint(
             ]
         },
         {
-            "doc_id": f"abdm_lab_{uuid.uuid4().hex[:8]}",
+            "doc_id_prefix": "abdm_lab",
             "file_type": "lab",
             "title": "Biochemistry Lab Report - Dr. Lal PathLabs",
             "date": "2026-04-15",
@@ -115,18 +103,64 @@ async def fetch_abdm_records_endpoint(
             ]
         }
     ]
+}
+
+
+@router.post("/fetch-records", response_model=ABDMFetchResponse)
+async def fetch_abdm_records_endpoint(
+    req: ABDMFetchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/abdm/fetch-records
+    Retrieves health records linked to patient's ABHA ID from the ABDM sandbox gateway
+    and stores retrieved records for the active session.
+    Requires active session, explicit store_abdm consent, and a valid registered ABHA identity.
+    """
+    logger.info(f"Initiating ABDM auto-fetch for ABHA: {req.abha_id}, Session: {req.session_id}")
+
+    # 1. Assert session active
+    await session_manager.assert_session_active(req.session_id, db)
+
+    # 2. Assert effective consent for 'store_abdm'
+    await check_effective_consent(req.session_id, "store_abdm", db)
+
+    # 3. Validate ABHA ID against registered sandbox patients
+    clean_id = req.abha_id.strip().lower()
+    matched_patient = None
+    if clean_id in SANDBOX_PATIENTS:
+        matched_patient = SANDBOX_PATIENTS[clean_id]
+    else:
+        for p in SANDBOX_PATIENTS.values():
+            if p.abha_number == req.abha_id.strip() or p.abha_id.lower() == clean_id:
+                matched_patient = p
+                break
+
+    if not matched_patient:
+        logger.warning(f"ABDM fetch rejected: unknown ABHA ID '{req.abha_id}'")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Patient identity '{req.abha_id}' not found in ABDM Sandbox registry.",
+        )
+
+    # Ensure upload directory exists
+    upload_dir = Path(settings.UPLOAD_DIR).resolve() / "documents" / req.session_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fetch records for matched patient
+    patient_records = PATIENT_SANDBOX_RECORDS.get(matched_patient.abha_id, [])
 
     total_extracted = 0
     records_meta = []
 
-    for record_data in mock_sandbox_records:
-        doc_id = record_data["doc_id"]
+    for record_data in patient_records:
+        doc_id = f"{record_data['doc_id_prefix']}_{uuid.uuid4().hex[:8]}"
         filename = f"{doc_id}.txt"
         file_path = upload_dir / filename
 
-        # Write text placeholder file for document storage
+        # Write text record file for document storage
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(f"ABDM Sandbox Record: {record_data['title']}\nDate: {record_data['date']}\nABHA: {req.abha_id}\n")
+            f.write(f"ABDM Sandbox Record: {record_data['title']}\nDate: {record_data['date']}\nABHA: {matched_patient.abha_id}\n")
 
         # Create Document row
         doc = Document(

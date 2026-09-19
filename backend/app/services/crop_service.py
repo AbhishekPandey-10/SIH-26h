@@ -4,14 +4,18 @@ PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
 Crops original document images at normalized coordinates [x, y, w, h] (0.0 to 1.0)
 with 8% padding to handle handwriting skew and camera tilt.
+Enforces strict coordinate validation and truthful error handling (no blank image synthesis).
 """
 
 import io
 import logging
+import math
 from pathlib import Path
 from typing import Dict, Tuple
 
 from PIL import Image
+
+from app.services.session_manager import session_manager
 
 logger = logging.getLogger("medikiosk.crop_service")
 
@@ -20,6 +24,17 @@ class CropService:
     def __init__(self, cache_size: int = 256):
         self._cache: Dict[Tuple[str, float, float, float, float], bytes] = {}
         self.max_cache_size = cache_size
+
+    def clear_cache(self, session_id: str | None = None) -> None:
+        """Purges cached crops; if session_id provided, purges paths containing session_id."""
+        if not session_id:
+            self._cache.clear()
+            logger.info("Cleared entire crop cache")
+            return
+        keys_to_remove = [k for k in self._cache.keys() if session_id in k[0]]
+        for k in keys_to_remove:
+            self._cache.pop(k, None)
+        logger.info(f"Purged {len(keys_to_remove)} crop cache entries for session {session_id}")
 
     def crop_document(
         self,
@@ -43,8 +58,26 @@ class CropService:
 
         Returns:
             JPEG image bytes of the cropped region.
+
+        Raises:
+            ValueError: If coordinates or dimensions are invalid.
+            FileNotFoundError: If source image does not exist.
         """
-        path_str = str(Path(image_path).resolve())
+        coords = [x, y, w, h]
+        if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in coords):
+            raise ValueError(f"Crop coordinates must be finite numbers: {coords}")
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise ValueError(f"Crop origin x={x}, y={y} must be between 0.0 and 1.0")
+        if w <= 0.0 or h <= 0.0:
+            raise ValueError(f"Crop dimensions w={w}, h={h} must be strictly positive")
+        if x + w > 1.05 or y + h > 1.05:
+            raise ValueError(f"Crop bounding box exceeds image boundaries: x+w={x+w:.4f}, y+h={y+h:.4f}")
+
+        path_obj = Path(image_path).resolve()
+        if not path_obj.exists():
+            raise FileNotFoundError(f"Source document image not found at {path_obj}")
+
+        path_str = str(path_obj)
         cache_key = (
             path_str,
             round(float(x), 4),
@@ -56,11 +89,7 @@ class CropService:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        if not Path(path_str).exists():
-            img = Image.new("RGB", (600, 800), color=(245, 245, 245))
-        else:
-            img = Image.open(path_str)
-
+        img = Image.open(path_str)
         img_w, img_h = img.size
 
         # Apply 8% padding to prevent OCR boundary clipping
@@ -102,3 +131,11 @@ class CropService:
 
 
 crop_service = CropService()
+
+
+async def _crop_cache_cleanup_hook(session_id: str) -> None:
+    """Registered encounter lifecycle cleanup hook to purge session crops."""
+    crop_service.clear_cache(session_id)
+
+
+session_manager.register_cleanup_hook(_crop_cache_cleanup_hook)

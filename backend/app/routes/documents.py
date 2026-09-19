@@ -5,7 +5,7 @@ PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
 import json
 import logging
-import shutil
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,11 +33,16 @@ from app.db.database import get_db
 from app.db.models import Document, ExtractedEntityModel
 from app.services.crop_service import crop_service
 from app.services.document_processor import document_processor, normalize_indian_date
+from app.services.session_manager import session_manager
 
 logger = logging.getLogger("medikiosk.routes.documents")
 
 router = APIRouter(prefix="/api/documents", tags=["Document OCR & Extraction"])
 ws_router = APIRouter(tags=["Scan Status WebSocket"])
+
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB limit
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 
 
 # ------------------------------------------------------------------------------
@@ -108,7 +113,6 @@ async def scan_status_websocket(websocket: WebSocket, session_id: str):
     await scan_status_manager.connect(session_id, websocket)
     try:
         while True:
-            # Keep connection alive; client can send ping/heartbeat
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text(json.dumps({"event": "pong"}))
@@ -139,19 +143,51 @@ async def upload_document_endpoint(
     """
     POST /api/documents/upload
     Accepts multipart document photo from camera or gallery.
-    Saves image to disk and creates a Document ORM row.
+    Enforces active session check, path containment, size limits, and allowed file formats.
     """
-    doc_id = str(uuid.uuid4())
-    upload_dir = Path(settings.UPLOAD_DIR) / "documents" / session_id
+    # 1. Path containment & session_id sanitization
+    if not session_id or not re.match(r"^[a-zA-Z0-9_\-]+$", session_id):
+        raise HTTPException(status_code=400, detail="Invalid session identifier: path traversal detected.")
+
+    # 2. Assert session active
+    await session_manager.assert_session_active(session_id, db)
+
+    upload_root = Path(settings.UPLOAD_DIR).resolve()
+    upload_dir = (upload_root / "documents" / session_id).resolve()
+    if not upload_dir.is_relative_to(upload_root):
+        raise HTTPException(status_code=400, detail="Path traversal attempt rejected")
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    extension = Path(file.filename or "scan.jpg").suffix or ".jpg"
+    # 3. File extension and MIME validation
+    orig_filename = file.filename or "scan.jpg"
+    extension = Path(orig_filename).suffix.lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file extension '{extension}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    if file.content_type and file.content_type.lower() not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported content type '{file.content_type}'. Allowed: {', '.join(ALLOWED_MIME_TYPES)}",
+        )
+
+    # 4. File size limit enforcement
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size exceeds maximum allowed limit of {MAX_UPLOAD_SIZE // (1024 * 1024)}MB",
+        )
+
+    doc_id = str(uuid.uuid4())
     target_filename = f"{doc_id}_p{page_number}{extension}"
     target_path = upload_dir / target_filename
 
     try:
         with open(target_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
         logger.error(f"Failed to write uploaded file to disk: {e}")
         raise HTTPException(status_code=500, detail="Failed to save uploaded image file")
@@ -201,6 +237,14 @@ async def process_document_endpoint(
     POST /api/documents/process/{doc_id}
     Triggers Gemini Multimodal OCR and structured entity extraction.
     """
+    stmt = select(Document).where(Document.id == doc_id)
+    res = await db.execute(stmt)
+    doc = res.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+
+    await session_manager.assert_session_active(doc.session_id, db)
+
     try:
         entities = await document_processor.process_document(
             document_id=doc_id,
@@ -212,11 +256,44 @@ async def process_document_endpoint(
             status="extracted",
             entity_count=len(entities),
         )
-    except ValueError as ve:
+    except (ValueError, FileNotFoundError) as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
         logger.error(f"Error during document processing {doc_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
+
+@router.get("/{doc_id}/status")
+async def get_document_status_endpoint(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    GET /api/documents/{doc_id}/status
+    Reliable status recovery endpoint for reconnecting scan clients.
+    Returns persistent processing state and entity count without relying on missed WebSockets.
+    """
+    stmt = (
+        select(Document, func.count(ExtractedEntityModel.id).label("entity_count"))
+        .outerjoin(ExtractedEntityModel, ExtractedEntityModel.document_id == Document.id)
+        .where(Document.id == doc_id)
+        .group_by(Document.id)
+    )
+    res = await db.execute(stmt)
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+
+    doc, count = row
+    return {
+        "document_id": doc.id,
+        "session_id": doc.session_id,
+        "status": doc.status,
+        "file_type": doc.file_type,
+        "page_number": doc.page_number,
+        "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        "entity_count": count,
+    }
 
 
 @router.get("/{doc_id}/crop")
@@ -232,8 +309,8 @@ async def crop_document_endpoint(
     """
     GET /api/documents/{doc_id}/crop
     Crops image at normalized coordinates with 8% drift padding and caches result.
-    Accepts either separate x, y, w, h queries or bbox=x,y,w,h.
-    Returns image/jpeg bytes.
+    Requires explicit valid coordinates (no default fabrication).
+    Returns image/jpeg bytes or truthful 404/400.
     """
     if bbox:
         try:
@@ -244,28 +321,29 @@ async def crop_document_endpoint(
         except Exception as e:
             logger.warning(f"Failed to parse bbox '{bbox}': {e}")
 
-    # Fallback default if still None
     if x is None or y is None or w is None or h is None:
-        x, y, w, h = 0.05, 0.2, 0.5, 0.1
+        raise HTTPException(
+            status_code=400,
+            detail="Valid normalized bounding box coordinates (x, y, w, h) must be provided",
+        )
 
     stmt = select(Document).where(Document.id == doc_id)
     res = await db.execute(stmt)
     doc = res.scalar_one_or_none()
     if not doc:
-        # Check if doc_id matches a sample document in sample_docs directory
-        sample_img = Path(settings.DATA_DIR) / "sample_docs" / f"{doc_id}.jpg"
-        if not sample_img.exists():
-            sample_img = Path(settings.DATA_DIR) / "sample_docs" / f"{doc_id}.png"
-        if sample_img.exists():
-            image_path = sample_img
-        else:
-            raise HTTPException(status_code=404, detail="Document not found")
-    else:
-        image_path = Path(doc.file_path)
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    image_path = Path(doc.file_path)
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Document source image file not found")
 
     try:
         jpeg_bytes = crop_service.crop_document(image_path, x, y, w, h)
         return Response(content=jpeg_bytes, media_type="image/jpeg")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except FileNotFoundError as fnf:
+        raise HTTPException(status_code=404, detail=str(fnf))
     except Exception as e:
         logger.error(f"Failed to crop image for doc {doc_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Crop failure: {str(e)}")
@@ -279,36 +357,17 @@ async def get_document_file_endpoint(
 ):
     """
     GET /api/documents/{doc_id}/file or GET /api/documents/{doc_id}/image
-    Serves original document image for browser rendering and bounding-box overlay.
+    Serves original document image for browser rendering.
+    Missing originals truthfully return HTTP 404 (no placeholder/sample fallback).
     """
     stmt = select(Document).where(Document.id == doc_id)
     res = await db.execute(stmt)
     doc = res.scalar_one_or_none()
 
-    if doc and Path(doc.file_path).exists():
-        return FileResponse(doc.file_path)
+    if not doc or not Path(doc.file_path).exists():
+        raise HTTPException(status_code=404, detail="Document image file not found")
 
-    # Check fallback sample documents
-    sample_img = Path(settings.DATA_DIR) / "sample_docs" / f"{doc_id}.jpg"
-    if not sample_img.exists():
-        sample_img = Path(settings.DATA_DIR) / "sample_docs" / f"{doc_id}.png"
-    if sample_img.exists():
-        return FileResponse(sample_img)
-
-    test_img = Path(settings.DATA_DIR).parent / "tests" / "test_data" / "sample_doc.jpg"
-    if test_img.exists():
-        return FileResponse(test_img)
-
-    # If doc exists in DB or is requested, return placeholder image bytes
-    if doc:
-        import io
-        from PIL import Image
-        img = Image.new("RGB", (800, 1000), color=(250, 250, 250))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG")
-        return Response(content=buf.getvalue(), media_type="image/jpeg")
-
-    raise HTTPException(status_code=404, detail="Document image file not found")
+    return FileResponse(doc.file_path)
 
 
 @router.get("/entity/{entity_id}")
@@ -350,7 +409,6 @@ async def get_single_entity_endpoint(
     }
 
 
-
 @router.get("/entities/{session_id}")
 async def get_session_entities_endpoint(
     session_id: str,
@@ -362,45 +420,14 @@ async def get_session_entities_endpoint(
     Returns all extracted entities for a session.
     Chronologically sorts entities by extracted_date across all scanned documents.
     Missing dates sort to the end with 'Date unknown'.
+    Truthfully returns empty list if no entities exist (no sample fallback).
     """
-    # Fetch all entities for this session
     stmt_entities = select(ExtractedEntityModel).where(ExtractedEntityModel.session_id == session_id)
     res_entities = await db.execute(stmt_entities)
     entities = list(res_entities.scalars().all())
 
-    # If empty, check if sample entities should be returned
-    if not entities:
-        # Check if fallback entities exist in sample_docs
-        sample_path = Path(settings.DATA_DIR) / "sample_docs" / "doc_01_prescription_printed.json"
-        if sample_path.exists():
-            try:
-                with open(sample_path, encoding="utf-8") as f:
-                    s_data = json.load(f)
-                    for ent in s_data.get("entities", []):
-                        entities.append(
-                            ExtractedEntityModel(
-                                id=f"ent_mock_{uuid.uuid4().hex[:8]}",
-                                document_id=s_data.get("document_id", "doc_01_prescription_printed"),
-                                session_id=session_id,
-                                entity_type=ent.get("type", "medication"),
-                                value=ent.get("value", ""),
-                                generic_name=ent.get("generic"),
-                                date=ent.get("date"),
-                                bounding_box=ent.get("bbox"),
-                                confidence=float(ent.get("confidence", 0.95)),
-                                unit=ent.get("unit"),
-                                reference_range=ent.get("reference_range"),
-                                is_abnormal=ent.get("is_abnormal"),
-                            )
-                        )
-            except Exception:
-                pass
-
-    # Chronological sort:
-    # Entities with valid YYYY-MM-DD sort first (earliest to latest or latest to earliest)
     def sort_key(e: ExtractedEntityModel):
         d = e.date or ""
-        # If missing or unknown date, sort to end
         if not d or d.lower() in ("unknown", "date unknown", "none"):
             return (1, "9999-99-99")
         norm = normalize_indian_date(d)
@@ -409,7 +436,6 @@ async def get_session_entities_endpoint(
     if sort == "chronological":
         entities.sort(key=sort_key)
 
-    # Format output
     entity_dicts = []
     for e in entities:
         display_date = e.date if (e.date and e.date.lower() not in ("none", "")) else "Date unknown"
@@ -427,7 +453,11 @@ async def get_session_entities_endpoint(
             "unit": e.unit,
             "reference_range": e.reference_range,
             "is_abnormal": e.is_abnormal,
-            "crop_url": f"/api/documents/{e.document_id}/crop?x={e.bounding_box[0]}&y={e.bounding_box[1]}&w={e.bounding_box[2]}&h={e.bounding_box[3]}" if e.bounding_box and len(e.bounding_box) == 4 else None,
+            "crop_url": (
+                f"/api/documents/{e.document_id}/crop?x={e.bounding_box[0]}&y={e.bounding_box[1]}&w={e.bounding_box[2]}&h={e.bounding_box[3]}"
+                if e.bounding_box and len(e.bounding_box) == 4
+                else None
+            ),
         })
 
     # Also group by document

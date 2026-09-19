@@ -7,21 +7,31 @@ import logging
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.db.models import ConsentAudit, Patient, Session
+from app.dependencies import (
+    AuthenticatedUser,
+    UserRole,
+    check_effective_consent,
+    require_authenticated_user,
+    require_encounter_access,
+    require_kiosk,
+    require_staff,
+)
 from app.services.abdm import (
     get_mock_fhir_bundles,
     request_otp,
     verify_abha,
     verify_otp,
 )
+from app.services.session_manager import session_manager
 from app.shared.schemas import ABHASession, OTPRequest, OTPVerify, PatientDemographics
 
 logger = logging.getLogger("medikiosk.routes.session")
@@ -59,6 +69,7 @@ class SessionStartResponse(BaseModel):
     caregiver_name: str | None = None
     voice_only_mode: bool = False
     interview_mode: str = "allopathic"
+    session_token: Optional[str] = None
 
 
 class SessionConfigureRequest(BaseModel):
@@ -105,12 +116,15 @@ class SessionEndRequest(BaseModel):
 # ==============================================================================
 
 @router.post("/start", response_model=SessionStartResponse)
-async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get_db)):
+async def start_session(
+    req: SessionStartRequest,
+    current_user: AuthenticatedUser = Depends(require_kiosk),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Initialize a new clinical intake session on the Kiosk.
-    Handed to Dev 1 LangGraph interview engine at the integration checkpoint.
-    Response shape matches Dev 1 exact contract:
-      { "session_id": "uuid", "patient_name": "...", "language": "hi", "abha_id": "..." }
+    Requires authenticated Kiosk or Staff role.
+    Response includes session_token (session_<uuid>) for scoped access.
     """
     session_uuid = str(uuid.uuid4())
     patient_name = req.patient_name or "मरीज (Patient)"
@@ -121,12 +135,12 @@ async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get
         try:
             demo = await verify_abha(req.abha_id)
             patient_name = demo.name
-            
+
             # Check if patient exists
             stmt = select(Patient).where(Patient.abha_id == req.abha_id)
             res = await db.execute(stmt)
             existing_patient = res.scalar_one_or_none()
-            
+
             if not existing_patient:
                 new_patient = Patient(
                     id=str(uuid.uuid4()),
@@ -185,6 +199,8 @@ async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get
         "started_at": datetime.now(UTC).isoformat(),
     }
 
+    session_token = f"session_{session_uuid}"
+
     return SessionStartResponse(
         session_id=session_uuid,
         patient_name=patient_name,
@@ -195,6 +211,7 @@ async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get
         caregiver_name=req.caregiver_name,
         voice_only_mode=req.voice_only_mode,
         interview_mode=req.interview_mode,
+        session_token=session_token,
     )
 
 
@@ -202,16 +219,20 @@ async def start_session(req: SessionStartRequest, db: AsyncSession = Depends(get
 async def configure_session(
     session_id: str,
     req: SessionConfigureRequest,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Configure session attributes (body map selections, interview mode, caregiver info, voice-only mode).
+    Enforces encounter scoping and rejects ended sessions (HTTP 409).
     """
-    stmt = select(Session).where(Session.id == session_id)
-    res = await db.execute(stmt)
-    sess_row = res.scalar_one_or_none()
-    if not sess_row:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if current_user.role != UserRole.STAFF and current_user.session_id and current_user.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Access denied to encounter session {session_id}.",
+        )
+
+    sess_row = await session_manager.assert_session_active(session_id, db)
 
     if req.body_map_selections is not None:
         sess_row.body_map_selections = req.body_map_selections
@@ -246,7 +267,8 @@ async def configure_session(
 @router.post("/verify-abha", response_model=PatientDemographics)
 async def verify_abha_endpoint(
     body: VerifyAbhaRequest | None = None,
-    abha_id: str | None = Query(None, description="ABHA address or 14-digit number")
+    abha_id: str | None = Query(None, description="ABHA address or 14-digit number"),
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
 ):
     """
     Verify ABHA ID against ABDM Sandbox.
@@ -279,7 +301,10 @@ async def verify_abha_endpoint(
 
 
 @router.post("/aadhaar-otp")
-async def aadhaar_otp_endpoint(req: AadhaarOTPRequest) -> Dict[str, str]:
+async def aadhaar_otp_endpoint(
+    req: AadhaarOTPRequest,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> Dict[str, str]:
     """
     Aadhaar OTP fallback endpoint when patient has no ABHA ID.
     Validates 12-digit Aadhaar number and sends mock OTP in sandbox.
@@ -292,14 +317,17 @@ async def aadhaar_otp_endpoint(req: AadhaarOTPRequest) -> Dict[str, str]:
         txn_id = await request_otp(digits)
         return {
             "txn_id": txn_id,
-            "message": "OTP sent to registered mobile linked with Aadhaar. (Sandbox code: 123456)"
+            "message": "OTP sent to registered mobile linked with Aadhaar."
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/verify-aadhaar-otp")
-async def verify_aadhaar_otp_endpoint(req: AadhaarOTPVerifyRequest) -> Dict[str, Any]:
+async def verify_aadhaar_otp_endpoint(
+    req: AadhaarOTPVerifyRequest,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> Dict[str, Any]:
     """
     Verify Aadhaar OTP and create a temporary unlinked patient identity.
     UI clearly labels this: 'Session created without ABHA linkage'.
@@ -309,7 +337,6 @@ async def verify_aadhaar_otp_endpoint(req: AadhaarOTPVerifyRequest) -> Dict[str,
         raise HTTPException(status_code=400, detail="Aadhaar number must be exactly 12 digits.")
 
     try:
-        # In sandbox, 123456 is the fixed OTP
         await verify_otp(req.txn_id, req.otp.strip())
         masked_aadhaar = f"XXXX-XXXX-{digits[-4:]}"
         return {
@@ -326,17 +353,23 @@ async def verify_aadhaar_otp_endpoint(req: AadhaarOTPVerifyRequest) -> Dict[str,
 
 
 @router.post("/consent")
-async def record_consent(req: RecordConsentRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def record_consent(
+    req: RecordConsentRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Record granular 3-step digital consent to the append-only consent_audit table.
+    Record granular digital consent to the append-only consent_audit table.
     Enforces immutability: no UPDATE or DELETE operations permitted.
     """
-    # Verify session exists
-    stmt = select(Session).where(Session.id == req.session_id)
-    res = await db.execute(stmt)
-    session_record = res.scalar_one_or_none()
-    if not session_record:
-        raise HTTPException(status_code=404, detail="Session not found.")
+    if current_user.role != UserRole.STAFF and current_user.session_id and current_user.session_id != req.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Access denied to encounter session {req.session_id}.",
+        )
+
+    await session_manager.assert_session_active(req.session_id, db)
 
     client_ip = request.client.host if request.client else "127.0.0.1"
 
@@ -353,7 +386,7 @@ async def record_consent(req: RecordConsentRequest, request: Request, db: AsyncS
         db.add(audit_entry)
 
     await db.commit()
-    logger.info(f"Recorded {len(req.consents)} consent decisions for session {req.session_id}")
+    logger.info(f"Recorded {len(req.consents)} consent decisions for session {req.session_id} by {current_user.user_id}")
 
     return {
         "status": "recorded",
@@ -364,41 +397,38 @@ async def record_consent(req: RecordConsentRequest, request: Request, db: AsyncS
 
 
 @router.post("/end")
-async def end_session(req: SessionEndRequest, db: AsyncSession = Depends(get_db)):
+async def end_session_endpoint(
+    req: SessionEndRequest,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Marks session complete and triggers privacy wipe on backend.
-    Purges transient in-memory caches, keeping only consented DB records.
+    Idempotent encounter-end workflow.
+    Marks session complete/wiped, purges unconsented data if share_doctor not granted,
+    closes active WebSockets, and purges transient caches.
     """
-    # 1. Update session status in DB
-    stmt = select(Session).where(Session.id == req.session_id)
-    res = await db.execute(stmt)
-    session_record = res.scalar_one_or_none()
-    if session_record:
-        session_record.status = "completed"
-        session_record.ended_at = datetime.now(UTC)
-        await db.commit()
+    if current_user.role != UserRole.STAFF and current_user.session_id and current_user.session_id != req.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Access denied to encounter session {req.session_id}.",
+        )
 
-    # 2. Server-side purge of in-memory cache
-    if req.session_id in _IN_MEMORY_SESSION_CACHE:
-        del _IN_MEMORY_SESSION_CACHE[req.session_id]
-
-    # 3. Purge interview engine in-memory session state (prevents memory leaks)
-    from app.services.interview_engine import interview_engine
-    interview_engine.cleanup_session(req.session_id)
-
-    logger.info(f"Session {req.session_id} ended. Transient memory wiped.")
-
-    return {
-        "status": "wiped",
-        "session_id": req.session_id,
-        "message": "Session completed and transient data wiped."
-    }
-
+    return await session_manager.end_session(req.session_id, db)
 
 
 @router.get("/{session_id}/status")
-async def get_session_status(session_id: str, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+async def get_session_status(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
     """Retrieve the current state of a kiosk encounter session."""
+    if current_user.role != UserRole.STAFF and current_user.session_id and current_user.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Access denied to encounter session {session_id}.",
+        )
+
     stmt = select(Session).where(Session.id == session_id)
     res = await db.execute(stmt)
     s = res.scalar_one_or_none()
@@ -416,19 +446,42 @@ async def get_session_status(session_id: str, db: AsyncSession = Depends(get_db)
 
 
 @router.post("/request-otp")
-async def legacy_request_otp(req: OTPRequest) -> Dict[str, str]:
+async def legacy_request_otp(
+    req: OTPRequest,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> Dict[str, str]:
     """Legacy OTP endpoint for backward compatibility with Phase 0 tests."""
     txn_id = await request_otp(req.identifier)
-    return {"txn_id": txn_id, "message": "OTP sent successfully. (Sandbox default is 123456)"}
+    return {"txn_id": txn_id, "message": "OTP sent successfully."}
 
 
 @router.post("/verify-otp", response_model=ABHASession)
-async def legacy_verify_otp(req: OTPVerify):
+async def legacy_verify_otp(
+    req: OTPVerify,
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+):
     """Legacy OTP verify endpoint for backward compatibility with Phase 0 tests."""
     return await verify_otp(req.txn_id, req.otp, req.abha_id)
 
 
 @router.get("/{session_id}/fhir")
-async def get_patient_fhir_records(session_id: str, abha_id: str = Query("rajesh.kumar@abdm")) -> List[Dict[str, Any]]:
-    """Retrieve pre-seeded FHIR R4 medical records from sandbox."""
+async def get_patient_fhir_records(
+    session_id: str,
+    abha_id: str = Query("rajesh.kumar@abdm"),
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve pre-seeded FHIR R4 medical records from sandbox.
+    Requires session access and effective consent for 'share_doctor'.
+    """
+    if current_user.role != UserRole.STAFF and current_user.session_id and current_user.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Access denied to encounter session {session_id}.",
+        )
+
+    # Consent gate
+    await check_effective_consent(session_id, "share_doctor", db)
+
     return get_mock_fhir_bundles(abha_id)

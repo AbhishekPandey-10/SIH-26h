@@ -99,13 +99,22 @@ def test_crop_service_with_padding(tmp_path: Path):
 
 def test_document_upload_and_process_endpoints(client: TestClient, tmp_path: Path):
     """Verify complete document upload -> process -> entities -> crop flow."""
+    from app.config import settings
+
+    # Start valid session first
+    start_res = client.post(
+        "/api/session/start",
+        json={"language": "hi", "is_caregiver": False},
+        headers={"Authorization": f"Bearer {settings.KIOSK_API_KEY}"},
+    )
+    assert start_res.status_code == 200
+    session_id = start_res.json()["session_id"]
+
     # Generate test image
     img = Image.new("RGB", (300, 400), color="white")
     img_bytes = io.BytesIO()
     img.save(img_bytes, format="JPEG")
     img_bytes.seek(0)
-
-    session_id = "test-doc-session-001"
 
     # 1. Upload
     response = client.post(
@@ -118,12 +127,27 @@ def test_document_upload_and_process_endpoints(client: TestClient, tmp_path: Pat
     doc_id = upload_data["document_id"]
     assert upload_data["status"] == "uploaded"
 
-    # 2. Process
-    proc_response = client.post(f"/api/documents/process/{doc_id}")
-    assert proc_response.status_code == 200
-    proc_data = proc_response.json()
-    assert proc_data["status"] == "extracted"
-    assert proc_data["entity_count"] > 0
+    # 2. Process with mocked vision provider
+    from unittest.mock import AsyncMock, patch
+    from app.services.document_processor import document_processor
+
+    mock_entities = [
+        {
+            "type": "medication",
+            "value": "Tab Glycomet 500mg",
+            "generic_name": "Metformin",
+            "confidence": 0.98,
+            "bounding_box": [0.1, 0.2, 0.4, 0.1],
+            "date": "15/03/2025",
+        }
+    ]
+
+    with patch.object(document_processor, "_call_gemini_vision", AsyncMock(return_value=mock_entities)):
+        proc_response = client.post(f"/api/documents/process/{doc_id}")
+        assert proc_response.status_code == 200
+        proc_data = proc_response.json()
+        assert proc_data["status"] == "extracted"
+        assert proc_data["entity_count"] > 0
 
     # 3. Fetch entities chronologically
     ent_response = client.get(f"/api/documents/entities/{session_id}?sort=chronological")
@@ -145,10 +169,31 @@ def test_document_upload_and_process_endpoints(client: TestClient, tmp_path: Pat
 
 def test_doctor_field_edit_put_endpoint(client: TestClient):
     """Verify doctor can edit field inline and track verification badge change."""
-    session_id = "doc-edit-session-001"
+    from app.config import settings
+
+    start_res = client.post(
+        "/api/session/start",
+        json={"language": "hi", "is_caregiver": False},
+        headers={"Authorization": f"Bearer {settings.KIOSK_API_KEY}"},
+    )
+    assert start_res.status_code == 200
+    session_id = start_res.json()["session_id"]
+    kiosk_headers = {"Authorization": f"Bearer {settings.KIOSK_API_KEY}"}
+    staff_headers = {"Authorization": f"Bearer {settings.STAFF_API_KEY}"}
+
+    # Grant share_doctor consent for encounter
+    consent_res = client.post(
+        "/api/session/consent",
+        json={
+            "session_id": session_id,
+            "consents": [{"action": "share_doctor", "granted": True}],
+        },
+        headers=kiosk_headers,
+    )
+    assert consent_res.status_code == 200
 
     # Generate summary first
-    gen_res = client.post("/api/summary/generate", json={"session_id": session_id})
+    gen_res = client.post("/api/summary/generate", json={"session_id": session_id}, headers=staff_headers)
     assert gen_res.status_code == 200
     fields = gen_res.json()
     assert len(fields) > 0
@@ -160,6 +205,7 @@ def test_doctor_field_edit_put_endpoint(client: TestClient):
     put_res = client.put(
         f"/api/summary/{session_id}/field/{field_id}",
         json={"content": updated_text, "doctor_notes": "Confirmed on examination"},
+        headers=staff_headers,
     )
     assert put_res.status_code == 200
     updated_field = put_res.json()

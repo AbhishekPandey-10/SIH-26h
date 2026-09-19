@@ -9,6 +9,7 @@ normalized bounding-box coordinates [x, y, w, h] and evaluates lab abnormalities
 
 import json
 import logging
+import math
 import os
 import re
 import uuid
@@ -17,25 +18,26 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import Document, ExtractedEntityModel
 from app.services.gemini_retry import gemini_call_with_retry
 from app.services.lab_flagging import lab_flagger
+from app.shared.schemas import EntityType
 
 logger = logging.getLogger("medikiosk.doc_processor")
 
 PROMPT_GEMINI_OCR = """Extract all medical entities from this Indian medical document image.
 
 For EACH entity, provide:
-- type: "diagnosis" | "medication" | "lab_value" | "allergy" | "procedure" | "vital_sign"
+- type: "diagnosis" | "medication" | "lab_value" | "allergy" | "procedure" | "vital"
 - value: the extracted text
 - generic_name: (for medications) the generic/molecule name if identifiable
-- date: date associated with this entity (YYYY-MM-DD format), if visible
+- date: date associated with this entity (DD/MM/YYYY or YYYY-MM-DD format), if visible
 - confidence: 0.0 to 1.0
-- bounding_box: [x, y, width, height] as NORMALIZED coordinates (0.0 to 1.0) relative to the image dimensions — this is CRITICAL, do not skip
+- bounding_box: [x, y, width, height] as NORMALIZED coordinates (0.0 to 1.0) relative to the image dimensions
 - unit: (for lab values) the unit of measurement
 - reference_range: (for lab values) the normal range if shown on the document
 
@@ -47,33 +49,58 @@ Output as JSON array ONLY. Do not enclose in markdown ticks if possible, or retu
 
 def normalize_indian_date(raw_date: str | None) -> str | None:
     """
-    Parse and normalize Indian dates (preferring DD/MM/YYYY) to YYYY-MM-DD.
+    Parse and normalize Indian dates (strictly day-first: DD/MM/YYYY) to YYYY-MM-DD.
+    Enforces strict calendar validation (rejects invalid leap days, invalid months/days).
+    Returns normalized YYYY-MM-DD string, or None if invalid/unparseable.
     """
-    if not raw_date:
+    if not raw_date or not isinstance(raw_date, str):
         return None
 
     clean = raw_date.strip()
+    if not clean or clean.lower() in ("none", "null"):
+        return None
 
-    # Already YYYY-MM-DD
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", clean):
+    if clean.lower() in ("unknown", "date unknown"):
         return clean
 
-    # DD/MM/YYYY or DD-MM-YYYY
+    # 1. Direct YYYY-MM-DD check with calendar validation
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", clean):
+        try:
+            parts = clean.split("-")
+            dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
+            return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
+        except (ValueError, TypeError):
+            return None
+
+    # 2. ISO timestamp with timezone (e.g. 2026-03-15T14:30:00Z or +05:30)
+    if "T" in clean:
+        try:
+            iso_clean = clean.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso_clean)
+            return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
+        except (ValueError, TypeError):
+            return None
+
+    # 3. DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (Strict day-first Indian convention)
     match_dmy = re.match(r"^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$", clean)
     if match_dmy:
-        day, month, year = int(match_dmy.group(1)), int(match_dmy.group(2)), int(match_dmy.group(3))
-        # Indian convention: assume day first unless day > 12 and month <= 12
-        if day > 12 and month <= 12:
-            pass  # Definitely day is first
-        elif month > 12 and day <= 12:
-            # Swapped
-            day, month = month, day
+        d_str, m_str, y_str = match_dmy.group(1), match_dmy.group(2), match_dmy.group(3)
         try:
-            return f"{year:04d}-{month:02d}-{day:02d}"
-        except Exception:
-            return clean
+            day, month, year = int(d_str), int(m_str), int(y_str)
+            dt = datetime(year, month, day)
+            return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
+        except (ValueError, TypeError):
+            return None
 
-    return clean
+    # 4. Textual month variants: DD Mon YYYY, DD-Mon-YYYY (e.g. 15 Mar 2025, 15-March-2025)
+    for fmt in ("%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%B-%Y", "%d/%b/%Y", "%d/%B/%Y"):
+        try:
+            dt = datetime.strptime(clean, fmt)
+            return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}"
+        except (ValueError, TypeError):
+            continue
+
+    return None
 
 
 class DocumentProcessor:
@@ -103,14 +130,20 @@ class DocumentProcessor:
         """
         Processes a Document record: runs OCR, evaluates lab values, stores entities in DB,
         and updates Document.status.
+
+        Guarantees:
+        - Transactional idempotency: deletes previously extracted entities for this document.
+        - Zero fabrication: missing or failed OCR produces zero invented facts.
+        - Canonical EntityType validation and strict bbox validation ([0, 1] or None).
+        - Error rollback: on failure, sets status='error' without leaving partial clinical entities.
         """
-        # Fetch document
         stmt = select(Document).where(Document.id == document_id)
         res = await db.execute(stmt)
         doc = res.scalar_one_or_none()
         if not doc:
             raise ValueError(f"Document {document_id} not found")
 
+        # Set processing status
         doc.status = "processing"
         await db.commit()
 
@@ -127,32 +160,41 @@ class DocumentProcessor:
             if progress_callback:
                 await progress_callback(doc.session_id, document_id, "extracting", 0.50)
 
-            # Call Gemini Vision or Fallback
+            # Invoke Gemini Vision
             client = self._get_client()
-            if client:
-                raw_entities = await self._call_gemini_vision(client, image_path)
-
-            # If Gemini returned empty or was unavailable, use robust local dataset fallback
-            if not raw_entities:
-                raw_entities = self._fallback_extract_entities(image_path, doc.file_type)
+            raw_entities = await self._call_gemini_vision(client, image_path)
 
             if progress_callback:
                 await progress_callback(doc.session_id, document_id, "extracting", 0.75)
 
-            # Parse, evaluate, and save entities
+            # Transactional replacement: delete any existing entities for this document
+            await db.execute(
+                delete(ExtractedEntityModel).where(ExtractedEntityModel.document_id == doc.id)
+            )
+
+            # Parse, evaluate, and save validated entities
             saved_entities: List[ExtractedEntityModel] = []
             for item in raw_entities:
                 val = str(item.get("value", "")).strip()
                 if not val:
                     continue
 
-                etype = item.get("type", "medication").lower()
+                raw_etype = str(item.get("type", "medication")).lower().strip()
+                if raw_etype in ("vital_sign", "vitals"):
+                    raw_etype = "vital"
+                # Strip unwanted suffixes
+                raw_etype = raw_etype.split(":")[0].replace("_low_confidence", "")
+
+                # Validate against canonical EntityType
+                valid_types = {e.value for e in EntityType}
+                etype = raw_etype if raw_etype in valid_types else EntityType.MEDICATION.value
+
                 unit = item.get("unit")
                 ref_range = item.get("reference_range")
                 is_abnormal = None
 
-                # For lab values: evaluate against reference ranges
-                if etype == "lab_value":
+                # Evaluate lab values against Indian clinical reference ranges
+                if etype == EntityType.LAB_VALUE.value:
                     flag, detected_range = lab_flagger.evaluate_lab_value(
                         test_name=val,
                         value_text=val,
@@ -162,14 +204,31 @@ class DocumentProcessor:
                     if detected_range and not ref_range:
                         ref_range = detected_range
 
-                # Ensure bbox is a 4-element normalized array [x, y, w, h]
+                # Strict bounding-box validation: must be 4 finite floats in [0, 1]
                 bbox = item.get("bounding_box") or item.get("bbox")
+                normalized_bbox = None
                 if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                    normalized_bbox = [round(float(c), 4) for c in bbox]
-                else:
-                    normalized_bbox = [0.1, 0.2, 0.4, 0.05]
+                    try:
+                        coords = [float(c) for c in bbox]
+                        if all(math.isfinite(c) and 0.0 <= c <= 1.0 for c in coords):
+                            x, y, w, h = coords
+                            if x + w <= 1.001 and y + h <= 1.001:
+                                normalized_bbox = [round(c, 4) for c in coords]
+                    except (ValueError, TypeError):
+                        normalized_bbox = None
 
+                # Strict calendar date normalization
                 norm_date = normalize_indian_date(item.get("date"))
+
+                # Finite confidence validation in [0.0, 1.0]
+                try:
+                    conf = float(item.get("confidence", 1.0))
+                    if not math.isfinite(conf):
+                        conf = 0.0
+                    else:
+                        conf = max(0.0, min(1.0, conf))
+                except (ValueError, TypeError):
+                    conf = 1.0
 
                 entity_model = ExtractedEntityModel(
                     id=f"ent_{uuid.uuid4().hex[:12]}",
@@ -180,15 +239,12 @@ class DocumentProcessor:
                     generic_name=item.get("generic_name") or item.get("generic"),
                     date=norm_date,
                     bounding_box=normalized_bbox,
-                    confidence=float(item.get("confidence", 0.95)),
+                    confidence=conf,
                     unit=unit,
                     reference_range=ref_range,
                     is_abnormal=is_abnormal,
                     created_at=datetime.now(UTC),
                 )
-                # Flag low-confidence entities as needing confirmation
-                if entity_model.confidence < 0.5:
-                    entity_model.entity_type = f"{entity_model.entity_type}:needs_confirmation"
                 db.add(entity_model)
                 saved_entities.append(entity_model)
 
@@ -203,117 +259,54 @@ class DocumentProcessor:
 
         except Exception as e:
             logger.error(f"Failed to process document {document_id}: {e}", exc_info=True)
-            doc.status = "error"
-            await db.commit()
-            if progress_callback:
+            await db.rollback()
+
+            # Persist explicit error status in clean transaction
+            stmt_err = select(Document).where(Document.id == document_id)
+            res_err = await db.execute(stmt_err)
+            doc_err = res_err.scalar_one_or_none()
+            if doc_err:
+                doc_err.status = "error"
+                await db.commit()
+
+            if progress_callback and doc:
                 await progress_callback(doc.session_id, document_id, "error", 0.0)
             raise
 
     async def _call_gemini_vision(self, client: Any, image_path: Path) -> List[Dict[str, Any]]:
         """Invokes Gemini Multimodal Vision to extract medical entities."""
-        try:
-            with Image.open(image_path):
-                pass  # Verifies image is valid
+        if not client:
+            raise RuntimeError("OCR vision provider is not configured or unavailable")
 
-            response = gemini_call_with_retry(
-                client, self.model_name,
-                [PROMPT_GEMINI_OCR, image_path.read_bytes()],
-            )
-            if response is None:
-                return []
+        with Image.open(image_path):
+            pass  # Verifies image is readable
 
-            text = response.text.strip()
-            # Clean markdown json fences if present
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+        response = gemini_call_with_retry(
+            client, self.model_name,
+            [PROMPT_GEMINI_OCR, image_path.read_bytes()],
+        )
+        if response is None:
+            return []
 
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                return parsed
-            if isinstance(parsed, dict) and "entities" in parsed:
-                return parsed["entities"]
-        except Exception as e:
-            logger.warning(f"Gemini Vision call encountered an error: {e}")
+        text = response.text.strip()
+        if not text:
+            return []
+
+        # Clean markdown json fences if present
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict) and "entities" in parsed:
+            return parsed["entities"]
         return []
-
-    def _fallback_extract_entities(self, image_path: Path, file_type: str | None) -> List[Dict[str, Any]]:
-        """
-        Robust offline fallback for sample datasets, demos, and testing.
-        Matches against sample doc annotations or provides clinical defaults.
-        """
-        stem = image_path.stem.lower()
-        sample_dir = settings.DATA_DIR / "sample_docs"
-
-        # Check for matching JSON in sample_docs
-        for candidate in sample_dir.glob("*.json"):
-            if candidate.stem.lower() in stem or stem in candidate.stem.lower():
-                try:
-                    with open(candidate, encoding="utf-8") as f:
-                        data = json.load(f)
-                        return data.get("entities", [])
-                except Exception:
-                    pass
-
-        # High-utility fallback clinical entities for Indian OPD demo
-        if file_type == "lab" or "lab" in stem or "cbc" in stem:
-            return [
-                {
-                    "type": "lab_value",
-                    "value": "Hemoglobin 9.8 g/dL",
-                    "unit": "g/dL",
-                    "date": "2025-03-12",
-                    "confidence": 0.96,
-                    "bounding_box": [0.12, 0.32, 0.45, 0.04],
-                },
-                {
-                    "type": "lab_value",
-                    "value": "TLC 12500 /cumm",
-                    "unit": "/cumm",
-                    "date": "2025-03-12",
-                    "confidence": 0.94,
-                    "bounding_box": [0.12, 0.38, 0.42, 0.04],
-                },
-                {
-                    "type": "lab_value",
-                    "value": "Platelets 1.8 Lakhs /cumm",
-                    "unit": "/cumm",
-                    "date": "2025-03-12",
-                    "confidence": 0.92,
-                    "bounding_box": [0.12, 0.44, 0.48, 0.04],
-                },
-            ]
-
-        # Prescription default
-        return [
-            {
-                "type": "diagnosis",
-                "value": "Type 2 Diabetes Mellitus",
-                "date": "2025-03-15",
-                "confidence": 0.97,
-                "bounding_box": [0.15, 0.22, 0.42, 0.04],
-            },
-            {
-                "type": "medication",
-                "value": "Tab Glycomet 500mg",
-                "generic_name": "Metformin",
-                "date": "2025-03-15",
-                "confidence": 0.98,
-                "bounding_box": [0.15, 0.34, 0.48, 0.05],
-            },
-            {
-                "type": "medication",
-                "value": "Tab Telma 40mg",
-                "generic_name": "Telmisartan",
-                "date": "2025-03-15",
-                "confidence": 0.95,
-                "bounding_box": [0.15, 0.41, 0.44, 0.05],
-            },
-        ]
 
 
 document_processor = DocumentProcessor()

@@ -3,8 +3,10 @@ Alembic migration environment configuration
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 """
 
+import os
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+import sqlalchemy as sa
+from sqlalchemy import engine_from_config, pool, event
 from alembic import context
 
 # this is the Alembic Config object
@@ -17,13 +19,28 @@ if config.config_file_name is not None:
     except Exception:
         pass
 
-# Import Base metadata containing all 8 models
+# Import Base metadata containing all models
 from app.db.models import Base
 target_metadata = Base.metadata
 
 
+def get_url() -> str:
+    """Resolve database URL with priority: CLI x-arg > env vars > alembic.ini."""
+    cmd_url = context.get_x_argument(as_dictionary=True).get("url")
+    if cmd_url:
+        return cmd_url
+    env_url = os.environ.get("ALEMBIC_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if env_url:
+        if env_url.startswith("sqlite+aiosqlite://"):
+            return env_url.replace("sqlite+aiosqlite://", "sqlite://")
+        if env_url.startswith("postgresql+asyncpg://"):
+            return env_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+        return env_url
+    return config.get_main_option("sqlalchemy.url") or "sqlite:///./medikiosk_dev.db"
+
+
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -36,15 +53,28 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    url = get_url()
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = url
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
+    # Enable foreign keys for SQLite connections at the DBAPI level
+    @event.listens_for(connectable, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        if connectable.dialect.name == "sqlite":
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
         )
 
         with context.begin_transaction():

@@ -133,7 +133,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_type: Mapped[str | None] = mapped_column(String(32), nullable=True)  # prescription, lab, discharge
     page_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -152,8 +152,8 @@ class ExtractedEntityModel(Base):
     __tablename__ = "extracted_entities"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    session_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id"), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False)  # medication, diagnosis, lab_value
     value: Mapped[str] = mapped_column(Text, nullable=False)
     generic_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -185,7 +185,7 @@ class InterviewTranscript(Base):
     __tablename__ = "interview_transcripts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
     turn_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     question_id: Mapped[str] = mapped_column(String(64), nullable=False)
     question_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -217,7 +217,7 @@ class ClinicalSummary(Base):
     __tablename__ = "summaries"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     lens: Mapped[str] = mapped_column(String(32), default="allopathic", nullable=False)  # allopathic, ayurvedic
     chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -251,7 +251,7 @@ class RedFlagEventModel(Base):
     __tablename__ = "red_flag_events"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
     trigger_phrase: Mapped[str] = mapped_column(String(255), nullable=False)
     matched_rule: Mapped[str] = mapped_column(String(255), nullable=False)
     severity: Mapped[str] = mapped_column(String(16), nullable=False)  # 'red' or 'amber'
@@ -271,16 +271,50 @@ class RedFlagEventModel(Base):
 
 class FHIRPushQueue(Base):
     """
-    Queue for failed or retryable ABDM FHIR bundle pushes.
+    Durable export job queue for ABDM FHIR bundle delivery.
+
+    Design invariants:
+    - One job per idempotency_key ({session_id}:{summary_version}).
+    - Retry updates the same row (never creates a new one).
+    - Lease-based claiming prevents concurrent duplicate delivery.
+    - Consent is revalidated at dispatch time.
+    - Attempt history preserves full delivery audit trail.
+
+    Status lifecycle:
+      pending → claimed → delivered
+                       → failed_retryable → pending (bounded by max_retry_count)
+                       → failed_terminal
+                       → blocked_consent_revoked
+                       → blocked_stale_version
     """
     __tablename__ = "fhir_push_queue"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    patient_abha_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    affirmed_by_doctor_id: Mapped[str] = mapped_column(String(64), nullable=False)
     bundle_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)  # pending, failed, pushed
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending", nullable=False
+    )  # pending, claimed, delivered, failed_retryable, failed_terminal, blocked_consent_revoked, blocked_stale_version
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_retry_count: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_history: Mapped[List[Dict[str, Any]] | None] = mapped_column(JSON, default=list, nullable=True)
+
+    # Lease-based claiming for concurrent worker safety
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Delivery tracking
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    abdm_transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Consent revalidation
+    consent_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -302,7 +336,7 @@ class SummaryResolution(Base):
     __tablename__ = "summary_resolutions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.id"), index=True, nullable=False)
     field_id: Mapped[str] = mapped_column(String(64), nullable=False)
     doctor_id: Mapped[str] = mapped_column(String(64), default="doc_opd_01", nullable=False)
     resolution_choice: Mapped[str] = mapped_column(String(32), nullable=False)  # use_document, use_patient, custom

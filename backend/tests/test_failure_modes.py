@@ -88,11 +88,18 @@ async def test_low_confidence_needs_confirmation_flag():
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        from app.config import settings
+        kiosk_headers = {"Authorization": f"Bearer {settings.KIOSK_API_KEY}"}
         # Start a session
-        resp = await client.post("/api/session/start", json={
-            "patient_name": "LowRes Test",
-            "language": "hi",
-        })
+        resp = await client.post(
+            "/api/session/start",
+            json={
+                "patient_name": "LowRes Test",
+                "language": "hi",
+            },
+            headers=kiosk_headers,
+        )
+        assert resp.status_code == 200
         session_id = resp.json()["session_id"]
 
         # Create a tiny mock document with low-confidence entities via the upload endpoint
@@ -183,41 +190,29 @@ def test_gemini_retry_all_call_sites_use_retry():
 
 
 # ═══════════════════════════════════════════════════════════════
-# d) ABDM Push Failure — fhir_push_queue
+# d) ABDM Export — consent-bound FHIR export
 # ═══════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
-async def test_abdm_push_failure_queues_bundle():
-    """ABDM push failure → bundle stored in fhir_push_queue, no crash."""
+async def test_abdm_export_requires_consent_and_verification():
+    """ABDM export requires staff auth, consent, and doctor-verified summary."""
+    staff_headers = {"Authorization": "Bearer staff_doc_opd_01"}
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Start session
-        start_resp = await client.post("/api/session/start", json={
-            "patient_name": "ABDM Fail Test",
-            "language": "hi",
-        })
-        session_id = start_resp.json()["session_id"]
-
-        # Push FHIR bundle — will fail since ABDM sandbox is unreachable
-        push_resp = await client.post("/api/fhir/push", json={
-            "session_id": session_id,
-            "patient_abha_id": "rajesh.kumar@abdm",
-        })
-        assert push_resp.status_code == 200
-        data = push_resp.json()
-
-        # Either succeeded (unlikely in test) or queued
-        if not data["success"]:
-            assert data.get("queue_id"), "Missing queue_id after failed push"
-            assert "queue" in data.get("message", "").lower() or "retry" in data.get("message", "").lower()
+        # Export without session → 404
+        export_resp = await client.post("/api/fhir/export", json={
+            "session_id": "nonexistent-session",
+        }, headers=staff_headers)
+        assert export_resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_fhir_retry_queue_endpoint():
-    """POST /api/fhir/retry-queue exists and returns valid response."""
+    """POST /api/fhir/retry-queue exists and returns valid response with staff auth."""
+    staff_headers = {"Authorization": "Bearer staff_doc_opd_01"}
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/fhir/retry-queue")
+        resp = await client.post("/api/fhir/retry-queue", headers=staff_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "processed" in data

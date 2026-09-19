@@ -3,8 +3,10 @@ Smart Recall Service (Zero-Repeat OPD Interview Engine)
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
 Extracts historical clinical entities from scanned documents and past visits,
-injects them into the LangGraph interview state, and transforms generic intake questions
-into confirmation prompts ("Your records show you take Metformin 500mg — is that still current?").
+injects them into interview memory, and transforms generic intake questions into:
+- <0.5: Ordinary generic question
+- 0.5 to 0.8 inclusive: Rephrase verification prompt ("Our records mention X — could you verify?")
+- >0.8: Confirmation prompt ("Your records show you take X — is that still current?")
 """
 
 import logging
@@ -20,7 +22,7 @@ logger = logging.getLogger("medikiosk.smart_recall")
 
 class SmartRecallService:
     """
-    Injects pre-scanned prescription and lab entities into interview memory.
+    Injects pre-scanned prescription, lab, and history entities into interview memory.
     Prevents redundant questioning and verifies existing treatments.
     """
 
@@ -32,42 +34,57 @@ class SmartRecallService:
         """
         Loads all extracted entities linked to this session, or to the same patient
         across historical visits.
+        Prioritizes recency (created_at desc) so stale records are not selected over fresh ones.
+        Normalizes a single canonical context dictionary shape.
         """
-        # Find patient_id for session
+        # 1. Find patient_id for session
         sess_stmt = select(Session).where(Session.id == session_id)
         sess_res = await db.execute(sess_stmt)
         sess = sess_res.scalar_one_or_none()
 
         patient_sessions = [session_id]
         if sess and sess.patient_id:
-            # Find all sessions for this patient
             p_stmt = select(Session.id).where(Session.patient_id == sess.patient_id)
             p_res = await db.execute(p_stmt)
-            patient_sessions = list(p_res.scalars().all()) or [session_id]
+            all_sids = p_res.scalars().all()
+            if all_sids:
+                patient_sessions = list(all_sids)
 
-        # Fetch extracted entities
+        # 2. Fetch extracted entities ordered by recency first, then confidence
         stmt = (
             select(ExtractedEntityModel)
             .where(ExtractedEntityModel.session_id.in_(patient_sessions))
-            .order_by(ExtractedEntityModel.confidence.desc())
+            .order_by(
+                ExtractedEntityModel.created_at.desc(),
+                ExtractedEntityModel.confidence.desc()
+            )
         )
         res = await db.execute(stmt)
         entities = res.scalars().all()
 
-        context = []
+        context: list[dict[str, Any]] = []
         for e in entities:
+            # Normalize schema: both entity_type and type present
+            ent_type = e.entity_type
+            if ent_type and ent_type.startswith("vital_sign"):
+                ent_type = "vital"
+
             context.append({
                 "entity_id": e.id,
+                "id": e.id,
                 "document_id": e.document_id,
-                "type": e.entity_type,
+                "session_id": e.session_id,
+                "entity_type": ent_type,
+                "type": ent_type,
                 "value": e.value,
                 "generic_name": e.generic_name,
                 "date": e.date,
-                "confidence": e.confidence,
+                "confidence": float(e.confidence) if e.confidence is not None else 0.0,
                 "bounding_box": e.bounding_box,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
             })
 
-        logger.info(f"Smart Recall injected {len(context)} historical entities into session {session_id}")
+        logger.info(f"Smart Recall loaded {len(context)} historical entities for encounter {session_id}")
         return context
 
     def adapt_question_with_recall(
@@ -78,88 +95,140 @@ class SmartRecallService:
         language: str = "hi",
     ) -> NextQuestion:
         """
-        Examines extracted_context for known facts matching the current section.
-        If high-confidence (>0.8) entity exists, replaces generic question with confirmation prompt.
+        Examines extracted_context for known facts matching current section.
+        Strict confidence tiering:
+        - < 0.5: Ordinary question (return default_question)
+        - 0.5 <= conf <= 0.8: Verification prompt
+        - > 0.8: Confirmation prompt
         """
         if not extracted_context:
             return default_question
 
         is_hi = (language == "hi")
 
+        matching_entities: list[dict[str, Any]] = []
         if section == "pmh":
-            # Check for known diagnoses
-            known_diag = [e for e in extracted_context if e.get("type") == "diagnosis" and e.get("confidence", 0) >= 0.8]
-            if known_diag:
-                top_diag = known_diag[0]
-                val = top_diag.get("value")
+            matching_entities = [
+                e for e in extracted_context
+                if (e.get("entity_type") in ("diagnosis", "condition", "pmh")
+                    or e.get("type") in ("diagnosis", "condition", "pmh"))
+            ]
+        elif section == "medications":
+            matching_entities = [
+                e for e in extracted_context
+                if (e.get("entity_type") == "medication"
+                    or e.get("type") == "medication"
+                    or e.get("generic_name"))
+            ]
+        elif section == "allergies":
+            matching_entities = [
+                e for e in extracted_context
+                if (e.get("entity_type") == "allergy"
+                    or e.get("type") == "allergy")
+            ]
+
+        if not matching_entities:
+            return default_question
+
+        # Pick best entity: preserved in recency/confidence order
+        top_item = matching_entities[0]
+        conf = float(top_item.get("confidence", 0.0))
+        val = top_item.get("generic_name") or top_item.get("value") or ""
+        ent_id = top_item.get("entity_id") or top_item.get("id") or "ent"
+
+        # Tier 1: Ordinary Question (< 0.5)
+        if conf < 0.5:
+            return default_question
+
+        # Tier 2: Verification Prompt (0.5 through 0.8 inclusive)
+        if 0.5 <= conf <= 0.8:
+            if section == "pmh":
+                text = (
+                    f"अस्पताल के रिकॉर्ड में {val} की समस्या का उल्लेख है। क्या आप पुष्टि कर सकते हैं कि क्या यह सही है?"
+                    if is_hi
+                    else f"Our hospital records mention you may have had {val}. Could you please verify if this is accurate?"
+                )
+                opts = ["हाँ, यह सही है", "नहीं, यह गलत है"] if is_hi else ["Yes, accurate", "No, not accurate"]
+            elif section == "medications":
+                text = (
+                    f"रिकॉर्ड में {val} का उल्लेख है। क्या आप पुष्टि कर सकते हैं कि आप यह दवाई लेते हैं?"
+                    if is_hi
+                    else f"Our hospital records mention you may be taking {val}. Could you please verify if you take this?"
+                )
+                opts = ["हाँ, यह दवाई लेता हूँ", "नहीं, यह नहीं लेता"] if is_hi else ["Yes, I take this", "No, I do not take this"]
+            else:  # allergies
+                text = (
+                    f"रिकॉर्ड में {val} से एलर्जी का उल्लेख है। क्या आप पुष्टि कर सकते हैं?"
+                    if is_hi
+                    else f"Our hospital records mention a possible allergy to {val}. Could you please verify if you have this allergy?"
+                )
+                opts = ["हाँ, इससे एलर्जी है", "नहीं, इससे एलर्जी नहीं है"] if is_hi else ["Yes, allergic", "No, not allergic"]
+
+            return NextQuestion(
+                question_id=f"recall_verify_{section}_{ent_id}",
+                text=text,
+                input_type="choice" if section == "medications" else "yes_no",
+                options=opts,
+                section=section,
+                progress_pct=default_question.progress_pct,
+                metadata={
+                    "is_smart_recall": True,
+                    "recall_mode": "rephrase_verification",
+                    "verification_tier": "verification",
+                    "confidence": conf,
+                    "target_entity": val,
+                    "source_entity_id": ent_id,
+                    "evidence_id": ent_id,
+                    "entity_value": val,
+                },
+            )
+
+        # Tier 3: Confirmation Prompt (> 0.8)
+        if conf > 0.8:
+            if section == "pmh":
                 text = (
                     f"आपके पिछले रिकॉर्ड के अनुसार आपको {val} की समस्या रही है — क्या यह अभी भी जारी है?"
                     if is_hi
                     else f"Your medical records indicate a history of {val} — are you still experiencing this?"
                 )
-                return NextQuestion(
-                    question_id=f"recall_pmh_{top_diag.get('entity_id', 'diag')}",
-                    text=text,
-                    input_type="yes_no",
-                    options=["हाँ (Yes, still continuing)", "नहीं (No, resolved)"] if is_hi else ["Yes", "No"],
-                    section="pmh",
-                    progress_pct=default_question.progress_pct,
-                    metadata={
-                        "is_smart_recall": True,
-                        "source_entity_id": top_diag.get("entity_id"),
-                        "entity_value": val,
-                    },
-                )
-
-        elif section == "medications":
-            # Check for known medications
-            known_meds = [e for e in extracted_context if e.get("type") == "medication" and e.get("confidence", 0) >= 0.8]
-            if known_meds:
-                top_med = known_meds[0]
-                med_name = top_med.get("value")
+                opts = ["हाँ, जारी है", "नहीं, ठीक हो चुकी है"] if is_hi else ["Yes, still ongoing", "No, resolved"]
+            elif section == "medications":
                 text = (
-                    f"आपके पर्चे में {med_name} दर्ज है — क्या आप अभी भी यह दवा नियमित ले रहे हैं?"
+                    f"आपके पिछले रिकॉर्ड के अनुसार आप {val} लेते हैं — क्या यह अभी भी जारी है? (Your records show you take {val} — is that still current?)"
                     if is_hi
-                    else f"Your records show you take {med_name} — is that still current?"
+                    else f"Your records show you take {val} — is that still current?"
                 )
-                return NextQuestion(
-                    question_id=f"recall_med_{top_med.get('entity_id', 'med')}",
-                    text=text,
-                    input_type="yes_no",
-                    options=["हाँ, नियमित ले रहा हूँ (Yes, taking regularly)", "नहीं, बंद कर दी है (No, stopped)"] if is_hi else ["Yes, taking regularly", "No, stopped"],
-                    section="medications",
-                    progress_pct=default_question.progress_pct,
-                    metadata={
-                        "is_smart_recall": True,
-                        "source_entity_id": top_med.get("entity_id"),
-                        "entity_value": med_name,
-                    },
+                opts = (
+                    ["हाँ, अभी भी ले रहा हूँ (Yes, still current)", "नहीं, बंद कर दी है (Stopped)", "डोज़ बदल गई है (Dose changed)"]
+                    if is_hi
+                    else ["Yes, still taking it", "No, stopped taking it", "Dose has changed"]
                 )
-
-        elif section == "allergies":
-            # Check for known allergies
-            known_allergies = [e for e in extracted_context if e.get("type") == "allergy" and e.get("confidence", 0) >= 0.8]
-            if known_allergies:
-                top_al = known_allergies[0]
-                al_name = top_al.get("value")
+            else:  # allergies
                 text = (
-                    f"आपके रिकॉर्ड में {al_name} से एलर्जी दर्ज है — क्या आपको कोई अन्य एलर्जी भी है?"
+                    f"आपके रिकॉर्ड में {val} से एलर्जी दर्ज है — क्या आपको कोई अन्य एलर्जी भी है?"
                     if is_hi
-                    else f"Your file notes an allergy to {al_name} — do you have any other drug allergies?"
+                    else f"Your file notes an allergy to {val} — do you have any other drug allergies?"
                 )
-                return NextQuestion(
-                    question_id=f"recall_all_{top_al.get('entity_id', 'all')}",
-                    text=text,
-                    input_type="voice_touch",
-                    options=["कोई अन्य एलर्जी नहीं (No other allergies)", "हाँ, अन्य भी है (Yes, other allergies)"] if is_hi else ["No other allergies", "Yes, other allergies"],
-                    section="allergies",
-                    progress_pct=default_question.progress_pct,
-                    metadata={
-                        "is_smart_recall": True,
-                        "source_entity_id": top_al.get("entity_id"),
-                        "entity_value": al_name,
-                    },
-                )
+                opts = ["कोई अन्य एलर्जी नहीं", "हाँ, अन्य भी है"] if is_hi else ["No other allergies", "Yes, other allergies"]
+
+            return NextQuestion(
+                question_id=f"recall_{section}_{ent_id}",
+                text=text,
+                input_type="choice" if section == "medications" else "yes_no",
+                options=opts,
+                section=section,
+                progress_pct=default_question.progress_pct,
+                metadata={
+                    "is_smart_recall": True,
+                    "recall_mode": "confirm_known_fact",
+                    "verification_tier": "confirmation",
+                    "confidence": conf,
+                    "target_entity": val,
+                    "source_entity_id": ent_id,
+                    "evidence_id": ent_id,
+                    "entity_value": val,
+                },
+            )
 
         return default_question
 

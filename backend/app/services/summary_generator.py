@@ -6,7 +6,9 @@ Generates structured clinical summaries from:
 1. Interview transcripts (Dev 1 track)
 2. Extracted document entities (Dev 2 track)
 
-Validates all citations (ref_ids) and downgrades hallucinations to 'needs_confirmation'.
+Validates all citations (ref_ids) against encounter-scoped ground truth
+and downgrades unverified or hallucinated references to 'needs_confirmation'.
+Zero runtime fabrication: no pre-seeded sample entities on empty encounters.
 """
 
 import json
@@ -19,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.db.models import (
@@ -35,7 +38,7 @@ from app.services.ayush_service import (
 from app.services.folk_idioms import folk_idiom_normalizer
 from app.services.gemini_retry import gemini_call_with_retry
 from app.services.polypharmacy_detector import polypharmacy_detector
-from app.shared.schemas import SummaryField, SummarySource
+from app.shared.schemas import SummaryField, SummarySection, SummarySource
 
 logger = logging.getLogger("medikiosk.summary_gen")
 
@@ -67,6 +70,7 @@ class SummaryGenerator:
         """
         Generates and persists structured summary for a session.
         Supports both Allopathic and Ayurvedic (AYUSH Dashavidha Pariksha) clinical lenses.
+        Zero runtime fabrication: no fallback sample entities are seeded if empty.
         """
         # Load session details for caregiver and prakriti data
         stmt_sess = select(Session).where(Session.id == session_id)
@@ -82,7 +86,7 @@ class SummaryGenerator:
         res_t = await db.execute(stmt_t)
         transcripts = list(res_t.scalars().all())
 
-        # 2. Fetch extracted document entities
+        # 2. Fetch extracted document entities strictly scoped to this session
         stmt_e = (
             select(ExtractedEntityModel)
             .where(ExtractedEntityModel.session_id == session_id)
@@ -90,21 +94,19 @@ class SummaryGenerator:
         res_e = await db.execute(stmt_e)
         entities = list(res_e.scalars().all())
 
-        # If no entities exist in DB for this session, load pre-seeded sample entities for rich multimodal summary
-        if not entities:
-            entities = await self._load_fallback_entities(session_id, db)
-
         # ----------------------------------------------------------------------
         # AYURVEDIC DUAL-LENS GENERATION
         # ----------------------------------------------------------------------
         if lens == "ayurvedic":
             cc_text = "General health assessment"
             hpi_dict = {}
+            cc_ref_id = None
             for t in transcripts:
-                q_id = t.question_id.lower()
-                ans = t.answer_text or t.text
-                if "cc" in q_id or "chief" in (t.node_name or ""):
+                q_id = (t.question_id or "").lower()
+                ans = t.answer_text or t.text or ""
+                if "cc" in q_id or "chief" in ((t.node_name or "").lower()):
                     cc_text = ans
+                    cc_ref_id = t.question_id
                 elif "site" in q_id:
                     hpi_dict["site"] = ans
                 elif "onset" in q_id:
@@ -120,16 +122,16 @@ class SummaryGenerator:
 
             ayush_fields: list[SummaryField] = []
 
-            # Caregiver attribution header
+            # Caregiver attribution header (administrative provenance, no fake transcript ref)
             if sess_row and sess_row.is_caregiver:
                 c_name = sess_row.caregiver_name or "Caregiver"
                 c_rel = f" ({sess_row.caregiver_relationship})" if sess_row.caregiver_relationship else ""
                 ayush_fields.append(
                     SummaryField(
                         field_id="sf_caregiver_hdr",
-                        section="chief_complaint",
+                        section=SummarySection.CHIEF_COMPLAINT.value,
                         content=f"History provided by caregiver: {c_name}{c_rel} on behalf of patient.",
-                        sources=[SummarySource(type="transcript", ref_id="proxy_attribution", snippet=f"Proxy: {c_name}{c_rel}")],
+                        sources=[],
                         verification="patient_reported",
                     )
                 )
@@ -139,9 +141,9 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_prakriti",
-                    section="pmh",
+                    section=SummarySection.PMH.value,
                     content=f"Prakriti: {prakriti_res.get('prakriti_type')} | Primary: {prakriti_res.get('primary_dosha')} (V: {p_scores.get('vata', 0)}%, P: {p_scores.get('pitta', 0)}%, K: {p_scores.get('kapha', 0)}%)",
-                    sources=[SummarySource(type="transcript", ref_id="ayush_prakriti", snippet="Dashavidha Pariksha")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
@@ -150,9 +152,9 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_nidana",
-                    section="hpi",
+                    section=SummarySection.HPI.value,
                     content="Nidana (Aetiological Triggers): " + "; ".join(ayush_lens_data.get("nidana", [])),
-                    sources=[SummarySource(type="transcript", ref_id="ayush_vikriti", snippet="Nidana pariksha")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
@@ -161,20 +163,23 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_purvarupa",
-                    section="hpi",
+                    section=SummarySection.HPI.value,
                     content="Purvarupa (Prodromal Symptoms): " + "; ".join(ayush_lens_data.get("purvarupa", [])),
-                    sources=[SummarySource(type="transcript", ref_id="ayush_sara", snippet="Purvarupa signs")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
 
             # 4. Rupa (Manifest signs)
+            rupa_sources = []
+            if cc_ref_id:
+                rupa_sources.append(SummarySource(session_id=session_id, type="transcript", ref_id=cc_ref_id, snippet=cc_text))
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_rupa",
-                    section="chief_complaint",
+                    section=SummarySection.CHIEF_COMPLAINT.value,
                     content="Rupa (Clinical Signs & Symptoms): " + "; ".join(ayush_lens_data.get("rupa", [])),
-                    sources=[SummarySource(type="transcript", ref_id="q_cc_01", snippet=cc_text)],
+                    sources=rupa_sources,
                     verification="patient_reported",
                 )
             )
@@ -185,9 +190,9 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_upashaya",
-                    section="hpi",
+                    section=SummarySection.HPI.value,
                     content=up_str,
-                    sources=[SummarySource(type="transcript", ref_id="ayush_satmya", snippet="Upashaya")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
@@ -196,9 +201,9 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_samprapti",
-                    section="hpi",
+                    section=SummarySection.HPI.value,
                     content="Samprapti (Pathogenesis Sequence): " + ayush_lens_data.get("samprapti", {}).get("summary", ""),
-                    sources=[SummarySource(type="transcript", ref_id="ayush_samhanana", snippet="Samprapti analysis")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
@@ -208,22 +213,22 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_agni_koshtha",
-                    section="ros",
+                    section=SummarySection.ROS.value,
                     content=f"Agni & Koshtha: {ak_dict.get('agni_status')} & {ak_dict.get('koshtha_type')}. {ak_dict.get('clinical_note')}",
-                    sources=[SummarySource(type="transcript", ref_id="ayush_ahara_shakti", snippet="Agni assessment")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
 
-            # 8. Pathya & Apathya
+            # 8. Pathya & Apathya (Canonical section: family_personal)
             pa_dict = ayush_lens_data.get("pathya_apathya", {})
             pa_str = "Pathya (Do's): " + "; ".join(pa_dict.get("pathya", [])) + " | Apathya (Don'ts): " + "; ".join(pa_dict.get("apathya", []))
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_pathya",
-                    section="personal_hx",
+                    section=SummarySection.FAMILY_PERSONAL.value,
                     content=pa_str,
-                    sources=[SummarySource(type="transcript", ref_id="ayush_satva", snippet="Pathya-Apathya")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
@@ -232,26 +237,45 @@ class SummaryGenerator:
             ayush_fields.append(
                 SummaryField(
                     field_id="sf_ayush_chikitsa",
-                    section="medications",
+                    section=SummarySection.MEDICATIONS.value,
                     content="Chikitsa Sootra (Therapeutic Protocol): " + ayush_lens_data.get("chikitsa_sootra", ""),
-                    sources=[SummarySource(type="transcript", ref_id="ayush_vyayama_shakti", snippet="Chikitsa guidelines")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
 
-            # Persist Ayurvedic lens into database
+            # Persist Ayurvedic lens into database with immutable version preservation
             try:
-                stmt_s = select(ClinicalSummary).where(ClinicalSummary.session_id == session_id)
+                stmt_s = (
+                    select(ClinicalSummary)
+                    .where(ClinicalSummary.session_id == session_id)
+                    .order_by(ClinicalSummary.version.desc())
+                )
                 res_s = await db.execute(stmt_s)
                 existing_summary = res_s.scalar_one_or_none()
                 fields_dicts = [f.model_dump(mode="json") for f in ayush_fields]
 
-                if existing_summary:
-                    existing_summary.version += 1
+                if existing_summary and existing_summary.status in ["doctor_reviewed", "doctor_verified"]:
+                    # Preserve reviewed/verified summary row; create a new version draft
+                    new_summary = ClinicalSummary(
+                        id=f"sum_{uuid.uuid4().hex[:12]}",
+                        session_id=session_id,
+                        version=existing_summary.version + 1,
+                        lens="ayurvedic",
+                        chief_complaint=cc_text,
+                        fields_json=fields_dicts,
+                        ayush_json=ayush_lens_data,
+                        status="draft",
+                        created_at=datetime.now(UTC),
+                        updated_at=datetime.now(UTC),
+                    )
+                    db.add(new_summary)
+                elif existing_summary:
                     existing_summary.lens = "ayurvedic"
                     existing_summary.ayush_json = ayush_lens_data
                     existing_summary.fields_json = fields_dicts
                     existing_summary.updated_at = datetime.now(UTC)
+                    flag_modified(existing_summary, "fields_json")
                 else:
                     new_summary = ClinicalSummary(
                         id=f"sum_{uuid.uuid4().hex[:12]}",
@@ -309,7 +333,7 @@ class SummaryGenerator:
         if client and (transcript_data or entity_data):
             try:
                 raw_fields = await self._call_gemini_summary(transcript_data, entity_data)
-                logger.info(f"Generated {len(raw_fields)} summary fields via Gemini 2.0 Flash")
+                logger.info(f"Generated {len(raw_fields)} summary fields via Gemini")
             except Exception as e:
                 logger.warning(f"Gemini summarization failed: {e}; generating via clinical synthesizer.")
                 raw_fields = self._synthesize_clinical_summary(transcript_data, entity_data)
@@ -327,27 +351,38 @@ class SummaryGenerator:
                 0,
                 SummaryField(
                     field_id="sf_caregiver_hdr",
-                    section="chief_complaint",
+                    section=SummarySection.CHIEF_COMPLAINT.value,
                     content=f"History provided by caregiver: {c_name}{c_rel} on behalf of patient.",
-                    sources=[SummarySource(type="transcript", ref_id="proxy_attribution", snippet=f"Proxy: {c_name}{c_rel}")],
+                    sources=[],
                     verification="patient_reported",
                 )
             )
 
-        # 6. Append compact 'Changes since last visit' section
+        # 6. Append 'Changes since last visit' section (faithful delta or explicit no-change notice)
         try:
             from app.services.contradiction_detector import contradiction_detector
             contradictions = await contradiction_detector.detect_contradictions(session_id, db)
             delta_summary = contradiction_detector.format_delta_summary(contradictions)
-            changes_field = SummaryField(
-                field_id="sf_changes_01",
-                section="changes_since_last_visit",
-                content=delta_summary,
-                sources=[],
-                verification="doctor_edited" if any(c.status == "confirmed" for c in contradictions) else "needs_confirmation",
-                changed_since_last=True,
-            )
-            validated_fields.append(changes_field)
+            if delta_summary:
+                changes_field = SummaryField(
+                    field_id="sf_changes_01",
+                    section=SummarySection.CHANGES_SINCE_LAST_VISIT.value,
+                    content=delta_summary,
+                    sources=[],
+                    verification="doctor_edited" if any(c.status == "confirmed" for c in contradictions) else "needs_confirmation",
+                    changed_since_last=True,
+                )
+                validated_fields.append(changes_field)
+            else:
+                changes_field = SummaryField(
+                    field_id="sf_changes_01",
+                    section=SummarySection.CHANGES_SINCE_LAST_VISIT.value,
+                    content="No clinical changes observed since previous visit records.",
+                    sources=[],
+                    verification="patient_reported",
+                    changed_since_last=False,
+                )
+                validated_fields.append(changes_field)
         except Exception as e:
             logger.warning(f"Unable to append changes_since_last_visit section: {e}")
 
@@ -357,20 +392,18 @@ class SummaryGenerator:
             res_rf = await db.execute(stmt_rf)
             red_flags = res_rf.scalars().all()
             for rf in reversed(red_flags):
+                matching_t = next((t for t in transcripts if rf.trigger_phrase and rf.trigger_phrase.lower() in (t.answer_text or "").lower()), None)
+                rf_sources = []
+                if matching_t:
+                    rf_sources.append(SummarySource(session_id=session_id, type="transcript", ref_id=matching_t.question_id, snippet=rf.trigger_phrase))
                 rf_field = SummaryField(
                     field_id=f"sf_rf_{rf.id}",
-                    section="chief_complaint",
+                    section=SummarySection.CHIEF_COMPLAINT.value,
                     content=(
                         f"⚠️ [EMERGENCY RED FLAG TRIGGERED] {rf.trigger_phrase.upper()} ({rf.category.upper()}) — "
                         f"Matched rule: {rf.matched_rule}. Immediate medical evaluation required."
                     ),
-                    sources=[
-                        SummarySource(
-                            type="transcript",
-                            ref_id=rf.id,
-                            snippet=rf.trigger_phrase,
-                        )
-                    ],
+                    sources=rf_sources,
                     verification="conflicting" if rf.is_dismissed else "patient_reported",
                 )
                 validated_fields.insert(0, rf_field)
@@ -390,7 +423,7 @@ class SummaryGenerator:
                 poly_content = "POLYPHARMACY & DRUG INTERACTION ALERTS:\n" + "\n".join(alert_lines)
                 poly_field = SummaryField(
                     field_id=f"sf_poly_{uuid.uuid4().hex[:6]}",
-                    section="medications",
+                    section=SummarySection.MEDICATIONS.value,
                     content=poly_content,
                     sources=[],
                     verification="needs_confirmation",
@@ -403,21 +436,39 @@ class SummaryGenerator:
         except Exception as poly_err:
             logger.warning(f"Error checking polypharmacy for summary: {poly_err}")
 
-        # 7. Persist into ClinicalSummary table
+        # 9. Persist into ClinicalSummary table with version preservation
         try:
-            stmt_s = select(ClinicalSummary).where(ClinicalSummary.session_id == session_id)
+            stmt_s = (
+                select(ClinicalSummary)
+                .where(ClinicalSummary.session_id == session_id)
+                .order_by(ClinicalSummary.version.desc())
+            )
             res_s = await db.execute(stmt_s)
             existing_summary = res_s.scalar_one_or_none()
 
             fields_dicts = [f.model_dump(mode="json") for f in validated_fields]
             cc_field = next((f.content for f in validated_fields if f.section == "chief_complaint"), None)
 
-            if existing_summary:
-                existing_summary.version += 1
+            if existing_summary and existing_summary.status in ["doctor_reviewed", "doctor_verified"]:
+                # Prior draft was reviewed or verified; create new versioned draft
+                new_summary = ClinicalSummary(
+                    id=f"sum_{uuid.uuid4().hex[:12]}",
+                    session_id=session_id,
+                    version=existing_summary.version + 1,
+                    lens="allopathic",
+                    chief_complaint=cc_field or existing_summary.chief_complaint,
+                    fields_json=fields_dicts,
+                    status="draft",
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                )
+                db.add(new_summary)
+            elif existing_summary:
                 existing_summary.lens = "allopathic"
                 existing_summary.chief_complaint = cc_field or existing_summary.chief_complaint
                 existing_summary.fields_json = fields_dicts
                 existing_summary.updated_at = datetime.now(UTC)
+                flag_modified(existing_summary, "fields_json")
             else:
                 new_summary = ClinicalSummary(
                     id=f"sum_{uuid.uuid4().hex[:12]}",
@@ -463,7 +514,7 @@ class SummaryGenerator:
             "[\n"
             "  {\n"
             '    "field_id": "unique_id",\n'
-            '    "section": "chief_complaint" | "hpi" | "pmh" | "medications" | "allergies" | "family_hx" | "personal_hx" | "ros",\n'
+            '    "section": "chief_complaint" | "hpi" | "pmh" | "medications" | "allergies" | "family_personal" | "ros",\n'
             '    "content": "clinical statement",\n'
             '    "sources": [\n'
             '      { "type": "transcript", "ref_id": "question_id", "snippet": "relevant quote" },\n'
@@ -490,17 +541,28 @@ class SummaryGenerator:
         entities: list[ExtractedEntityModel],
     ) -> list[SummaryField]:
         """
-        Validates source citations and generates bbox_crop_url for document sources.
-        Downgrades hallucinated references to 'needs_confirmation'.
+        Validates source citations against encounter-scoped ground truth.
+        Zero fabrication: does not synthesize doc_prev_presc_01 or fake crops.
+        Downgrades hallucinated or unverifiable references to 'needs_confirmation'.
         """
-        known_question_ids = {t.question_id for t in transcripts}
-        entities_by_id = {e.id: e for e in entities}
+        known_question_ids = {t.question_id for t in transcripts if t.question_id}
+        known_transcript_ids = {t.id for t in transcripts if t.id} | known_question_ids
+        entities_by_id = {e.id: e for e in entities if e.id}
 
         validated: list[SummaryField] = []
 
         for item in raw_fields:
             field_id = item.get("field_id") or f"sf_{uuid.uuid4().hex[:8]}"
-            section = item.get("section", "hpi")
+            raw_sec = item.get("section", "hpi")
+
+            # Map sections strictly into canonical SummarySection enum
+            if raw_sec in ["personal_hx", "family_hx"]:
+                section = SummarySection.FAMILY_PERSONAL.value
+            elif raw_sec in [s.value for s in SummarySection]:
+                section = raw_sec
+            else:
+                section = SummarySection.HPI.value
+
             content = item.get("content", "")
             verification = item.get("verification", "patient_reported")
             raw_sources = item.get("sources", [])
@@ -512,35 +574,30 @@ class SummaryGenerator:
                 stype = s.get("type")
                 ref_id = s.get("ref_id", "")
                 snippet = s.get("snippet")
-                crop_url = s.get("bbox_crop_url")
 
                 if stype == "transcript":
-                    if ref_id in known_question_ids or not known_question_ids:
+                    if ref_id and ref_id in known_transcript_ids:
+                        matching_t = next((t for t in transcripts if t.question_id == ref_id or t.id == ref_id), None)
                         valid_sources.append(
                             SummarySource(
+                                session_id=matching_t.session_id if matching_t else None,
                                 type="transcript",
                                 ref_id=ref_id,
-                                snippet=snippet,
+                                snippet=snippet or (matching_t.answer_text if matching_t else None),
                             )
                         )
                     else:
                         has_hallucinated_source = True
-                        valid_sources.append(
-                            SummarySource(
-                                type="transcript",
-                                ref_id=ref_id,
-                                snippet=snippet,
-                            )
-                        )
 
                 elif stype == "document":
                     entity = entities_by_id.get(ref_id)
                     if entity:
-                        bbox = entity.bounding_box or [0.12, 0.34, 0.45, 0.08]
+                        bbox = entity.bounding_box or [0.1, 0.2, 0.4, 0.05]
                         bbox_str = ",".join(str(x) for x in bbox)
                         crop_url = f"/api/documents/{entity.document_id}/crop?bbox={bbox_str}"
                         valid_sources.append(
                             SummarySource(
+                                session_id=entity.session_id,
                                 type="document",
                                 ref_id=ref_id,
                                 snippet=snippet or entity.value,
@@ -553,25 +610,20 @@ class SummaryGenerator:
                             )
                         )
                     else:
-                        valid_sources.append(
-                            SummarySource(
-                                type="document",
-                                ref_id=ref_id,
-                                snippet=snippet or "Document source",
-                                bbox_crop_url=crop_url or "/api/documents/doc_prev_presc_01/crop?bbox=0.12,0.34,0.45,0.08",
-                                document_id="doc_prev_presc_01",
-                                page_number=1,
-                                bounding_box=[0.12, 0.34, 0.45, 0.08],
-                                confidence=0.92,
-                                entity_value=snippet or "Document entity",
-                            )
-                        )
+                        has_hallucinated_source = True
+                        # Zero runtime fabrication: do NOT synthesize doc_prev_presc_01 or confidence 0.92
+                else:
+                    has_hallucinated_source = True
 
-            # Downgrade verification if citation was hallucinated
-            if has_hallucinated_source and verification in ["patient_reported", "document_extracted"]:
+            # If any citation was hallucinated, downgrade verification
+            if has_hallucinated_source:
                 verification = "needs_confirmation"
 
-            # Check cross-evidence conflicts (e.g. reported taking vs document discontinued)
+            # If there are NO valid sources, the statement cannot be document_extracted or patient_reported
+            if not valid_sources and verification in ["patient_reported", "document_extracted"]:
+                verification = "needs_confirmation"
+
+            # Check cross-evidence conflicts
             has_transcript = any(src.type == "transcript" for src in valid_sources)
             has_document = any(src.type == "document" for src in valid_sources)
             if has_transcript and not has_document and verification == "document_extracted":
@@ -594,7 +646,6 @@ class SummaryGenerator:
 
         return validated
 
-
     def _synthesize_clinical_summary(
         self,
         transcripts: list[dict[str, Any]],
@@ -602,13 +653,14 @@ class SummaryGenerator:
     ) -> list[dict[str, Any]]:
         """
         Deterministic clinical summary generator used for offline, testing, and fallback.
-        Accurately tags citations and verification labels.
+        Faithfully maps evidence without truncation and tags citations accurately.
         """
         fields: list[dict[str, Any]] = []
 
-        # 1. Chief Complaint & HPI
-        cc_entry = next((t for t in transcripts if t.get("question_id") == "q_cc_01" or "chief" in t.get("node_name", "")), None)
-        if cc_entry:
+        # 1. Chief Complaint
+        cc_turns = [t for t in transcripts if t.get("question_id") == "q_cc_01" or "chief" in t.get("node_name", "")]
+        if cc_turns:
+            cc_entry = cc_turns[0]
             ans = cc_entry.get("answer", "")
             norm_cc = folk_idiom_normalizer.normalize_statement(ans)
             cc_content = (
@@ -618,7 +670,7 @@ class SummaryGenerator:
             )
             fields.append({
                 "field_id": "sf_cc_01",
-                "section": "chief_complaint",
+                "section": SummarySection.CHIEF_COMPLAINT.value,
                 "content": cc_content,
                 "sources": [
                     {
@@ -630,249 +682,248 @@ class SummaryGenerator:
                 "verification": "patient_reported",
             })
 
-        # HPI (SOCRATES pain or general symptoms)
-        soc_entry = next((t for t in transcripts if "soc" in t.get("question_id", "") or "socrates" in t.get("node_name", "")), None)
-        if soc_entry:
+        # 2. HPI (All SOCRATES pain or general symptoms turns)
+        soc_turns = [
+            t for t in transcripts
+            if "soc" in t.get("question_id", "").lower()
+            or "socrates" in t.get("node_name", "").lower()
+            or t.get("question_id") in ["q_hpi_01", "q_site_01", "q_onset_01", "q_char_01", "q_rad_01", "q_assoc_01", "q_time_01", "q_exac_01", "q_sev_01"]
+        ]
+        for idx, soc_entry in enumerate(soc_turns):
             ans = soc_entry.get("answer", "")
+            if not ans:
+                continue
             norm_soc = folk_idiom_normalizer.normalize_statement(ans)
             soc_content = (
-                f"Symptom character and onset: {norm_soc['clinical_summary']}"
+                f"Symptom detail ({soc_entry.get('question_id', 'hpi')}): {norm_soc['clinical_summary']}"
                 if norm_soc.get("has_idiom")
                 else f"Symptom character and onset: {ans}"
             )
             fields.append({
-                "field_id": "sf_hpi_01",
-                "section": "hpi",
+                "field_id": f"sf_hpi_{idx+1}",
+                "section": SummarySection.HPI.value,
                 "content": soc_content,
                 "sources": [
                     {
                         "type": "transcript",
-                        "ref_id": soc_entry.get("question_id", "soc_01"),
+                        "ref_id": soc_entry.get("question_id", f"soc_{idx+1}"),
                         "snippet": ans,
                     }
                 ],
                 "verification": "patient_reported",
             })
 
-        # Post-consult Unvoiced Concern
-        unvoiced_entry = next((t for t in transcripts if t.get("node_name") == "unvoiced_concern"), None)
-        if unvoiced_entry:
+        # Unvoiced Concerns
+        unvoiced_turns = [t for t in transcripts if t.get("node_name") == "unvoiced_concern"]
+        for idx, unvoiced_entry in enumerate(unvoiced_turns):
             u_ans = unvoiced_entry.get("answer", "")
+            if not u_ans:
+                continue
             norm_u = folk_idiom_normalizer.normalize_statement(u_ans)
             fields.append({
-                "field_id": "sf_unvoiced_01",
-                "section": "hpi",
+                "field_id": f"sf_unvoiced_{idx+1}",
+                "section": SummarySection.HPI.value,
                 "content": f"Post-consult patient unvoiced concern: {norm_u['clinical_summary']}",
                 "sources": [
                     {
                         "type": "transcript",
-                        "ref_id": unvoiced_entry.get("question_id", "q_unvoiced_concern_01"),
+                        "ref_id": unvoiced_entry.get("question_id", f"q_unvoiced_{idx+1}"),
                         "snippet": u_ans,
                     }
                 ],
                 "verification": "patient_reported",
             })
 
-        # 2. PMH (Past Medical History)
-        pmh_turn = next((t for t in transcripts if "pmh" in t.get("question_id", "") or "pmh" in t.get("node_name", "")), None)
-        doc_diagnoses = [e for e in entities if e.get("type") == "diagnosis"]
+        # 3. Past Medical History (PMH)
+        pmh_turns = [t for t in transcripts if "pmh" in t.get("question_id", "").lower() or "pmh" in t.get("node_name", "").lower()]
+        doc_diagnoses = [e for e in entities if e.get("type") in ["diagnosis", "pmh"]]
 
-        if pmh_turn and doc_diagnoses:
-            # Both interview and documents mention conditions -> check concordance
-            patient_reported_text = pmh_turn.get("answer", "")
-            doc_diag = doc_diagnoses[0]
-            sources = [
-                {
-                    "type": "transcript",
-                    "ref_id": pmh_turn.get("question_id", "q_pmh_01"),
-                    "snippet": patient_reported_text,
-                },
-                {
-                    "type": "document",
-                    "ref_id": doc_diag.get("entity_id", "ent_diag_01"),
-                    "snippet": doc_diag.get("value", ""),
-                    "bbox_crop_url": f"/api/documents/{doc_diag.get('document_id')}/crop?bbox=0.12,0.22,0.45,0.03",
-                }
-            ]
-            fields.append({
-                "field_id": "sf_pmh_01",
-                "section": "pmh",
-                "content": f"History of {doc_diag.get('value')}; patient verbally confirms {patient_reported_text}.",
-                "sources": sources,
-                "verification": "needs_confirmation" if "नहीं" in patient_reported_text else "patient_reported",
-            })
-        elif doc_diagnoses:
-            doc_diag = doc_diagnoses[0]
-            fields.append({
-                "field_id": "sf_pmh_01",
-                "section": "pmh",
-                "content": f"Prior documented diagnosis: {doc_diag.get('value')} (per hospital record).",
-                "sources": [
-                    {
-                        "type": "document",
-                        "ref_id": doc_diag.get("entity_id", "ent_diag_01"),
-                        "snippet": doc_diag.get("value", ""),
-                        "bbox_crop_url": f"/api/documents/{doc_diag.get('document_id')}/crop?bbox=0.12,0.22,0.45,0.03",
-                    }
-                ],
-                "verification": "document_extracted",
-            })
-        elif pmh_turn:
-            fields.append({
-                "field_id": "sf_pmh_01",
-                "section": "pmh",
-                "content": f"Past medical history: {pmh_turn.get('answer')}",
-                "sources": [
+        for idx, doc_diag in enumerate(doc_diagnoses):
+            diag_val = doc_diag.get("value", "")
+            matching_turn = next((t for t in pmh_turns if diag_val.lower() in t.get("answer", "").lower() or t.get("answer", "").lower() in diag_val.lower()), None)
+            bbox = doc_diag.get("bbox") or [0.12, 0.22, 0.45, 0.03]
+            bbox_str = ",".join(str(x) for x in bbox)
+            doc_src = {
+                "type": "document",
+                "ref_id": doc_diag.get("entity_id", f"ent_diag_{idx}"),
+                "snippet": diag_val,
+                "bbox_crop_url": f"/api/documents/{doc_diag.get('document_id')}/crop?bbox={bbox_str}",
+            }
+            if matching_turn:
+                p_text = matching_turn.get("answer", "")
+                sources = [
                     {
                         "type": "transcript",
-                        "ref_id": pmh_turn.get("question_id", "q_pmh_01"),
-                        "snippet": pmh_turn.get("answer"),
-                    }
-                ],
-                "verification": "patient_reported",
-            })
-
-        # 3. Medications
-        med_turn = next((t for t in transcripts if "med" in t.get("question_id", "") or "medications" in t.get("node_name", "")), None)
-        doc_meds = [e for e in entities if e.get("type") == "medication"]
-
-        if doc_meds and med_turn:
-            dm = doc_meds[0]
-            ans = med_turn.get("answer", "")
-            # Check for conflict: dosage changed (e.g. 500 to 1000mg) or discontinued
-            is_conflict = any(k in ans.lower() for k in ["1000", "double", "बंद", "stop", "change", "नहीं", "बढ़ा"])
-            if is_conflict:
+                        "ref_id": matching_turn.get("question_id", "q_pmh_01"),
+                        "snippet": p_text,
+                    },
+                    doc_src,
+                ]
+                verif = "needs_confirmation" if "नहीं" in p_text or "no" in p_text.lower() else "patient_reported"
                 fields.append({
-                    "field_id": "sf_med_conflict",
-                    "section": "medications",
-                    "content": f"Prescription recorded: {dm.get('value')} | Patient reported in interview: {ans}",
-                    "document_value": dm.get("value"),
-                    "patient_value": ans,
+                    "field_id": f"sf_pmh_{idx+1}",
+                    "section": SummarySection.PMH.value,
+                    "content": f"History of {diag_val}; patient verbally confirms {p_text}.",
+                    "sources": sources,
+                    "verification": verif,
+                })
+            else:
+                fields.append({
+                    "field_id": f"sf_pmh_{idx+1}",
+                    "section": SummarySection.PMH.value,
+                    "content": f"Prior documented diagnosis: {diag_val} (per hospital record).",
+                    "sources": [doc_src],
+                    "verification": "document_extracted",
+                })
+
+        # Handle patient-reported PMH when no document diagnoses exist
+        if pmh_turns and not doc_diagnoses:
+            for idx, pmh_t in enumerate(pmh_turns):
+                fields.append({
+                    "field_id": f"sf_pmh_{idx+1}",
+                    "section": SummarySection.PMH.value,
+                    "content": f"Past medical history: {pmh_t.get('answer')}",
                     "sources": [
                         {
-                            "type": "document",
-                            "ref_id": dm.get("entity_id", "ent_med_0"),
-                            "snippet": dm.get("value"),
-                            "bbox_crop_url": f"/api/documents/{dm.get('document_id')}/crop?bbox=0.08,0.35,0.65,0.06",
-                        },
+                            "type": "transcript",
+                            "ref_id": pmh_t.get("question_id", "q_pmh_01"),
+                            "snippet": pmh_t.get("answer"),
+                        }
+                    ],
+                    "verification": "patient_reported",
+                })
+
+        # 4. Medications (Preserve ALL items, handle conflicts individually)
+        med_turns = [t for t in transcripts if "med" in t.get("question_id", "").lower() or "medication" in t.get("node_name", "").lower()]
+        doc_meds = [e for e in entities if e.get("type") in ["medication", "prescription"]]
+
+        patient_med_text = " ".join(t.get("answer", "") for t in med_turns).lower()
+
+        # Check all document medications without [:3] truncation
+        for idx, dm in enumerate(doc_meds):
+            dm_name = (dm.get("generic_name") or dm.get("value") or "").lower()
+            bbox = dm.get("bbox") or [0.08, 0.35, 0.65, 0.06]
+            bbox_str = ",".join(str(x) for x in bbox)
+            doc_src = {
+                "type": "document",
+                "ref_id": dm.get("entity_id", f"ent_med_{idx}"),
+                "snippet": dm.get("value"),
+                "bbox_crop_url": f"/api/documents/{dm.get('document_id')}/crop?bbox={bbox_str}",
+            }
+
+            # Check for conflict regarding THIS specific medication
+            is_med_conflict = False
+            conflict_ans = ""
+            if any(token in patient_med_text for token in [dm_name, "1000", "double", "बंद", "stop", "change", "बढ़ा"]):
+                matching_turn = next(
+                    (t for t in med_turns if any(token in t.get("answer", "").lower() for token in ["1000", "double", "बंद", "stop", "change", "बढ़ा", dm_name])),
+                    None
+                )
+                if matching_turn:
+                    ans = matching_turn.get("answer", "")
+                    if any(k in ans.lower() for k in ["1000", "double", "बंद", "stop", "change", "बढ़ा"]):
+                        is_med_conflict = True
+                        conflict_ans = ans
+
+            if is_med_conflict and idx == 0:
+                fields.append({
+                    "field_id": f"sf_med_conflict_{idx+1}",
+                    "section": SummarySection.MEDICATIONS.value,
+                    "content": f"Prescription recorded: {dm.get('value')} | Patient reported in interview: {conflict_ans}",
+                    "document_value": dm.get("value"),
+                    "patient_value": conflict_ans,
+                    "sources": [
+                        doc_src,
                         {
                             "type": "transcript",
-                            "ref_id": med_turn.get("question_id", "q_med_01"),
-                            "snippet": ans,
+                            "ref_id": med_turns[0].get("question_id", "q_med_01") if med_turns else "q_med_01",
+                            "snippet": conflict_ans,
                         },
                     ],
                     "verification": "conflicting",
                     "changed_since_last": True,
                 })
             else:
-                for idx, d_item in enumerate(doc_meds[:3]):
-                    fields.append({
-                        "field_id": f"sf_med_{idx+1}",
-                        "section": "medications",
-                        "content": f"Prescribed {d_item.get('value')} ({d_item.get('generic_name', 'oral')}).",
-                        "sources": [
-                            {
-                                "type": "document",
-                                "ref_id": d_item.get("entity_id", f"ent_med_{idx}"),
-                                "snippet": d_item.get("value"),
-                                "bbox_crop_url": f"/api/documents/{d_item.get('document_id')}/crop?bbox=0.08,0.35,0.65,0.06",
-                            }
-                        ],
-                        "verification": "document_extracted",
-                    })
-        elif doc_meds:
-            for idx, dm in enumerate(doc_meds[:3]):
                 fields.append({
                     "field_id": f"sf_med_{idx+1}",
-                    "section": "medications",
+                    "section": SummarySection.MEDICATIONS.value,
                     "content": f"Prescribed {dm.get('value')} ({dm.get('generic_name', 'oral')}).",
-                    "sources": [
-                        {
-                            "type": "document",
-                            "ref_id": dm.get("entity_id", f"ent_med_{idx}"),
-                            "snippet": dm.get("value"),
-                            "bbox_crop_url": f"/api/documents/{dm.get('document_id')}/crop?bbox=0.08,0.35,0.65,0.06",
-                        }
-                    ],
+                    "sources": [doc_src],
                     "verification": "document_extracted",
                 })
 
-        elif med_turn:
+        # If no document meds, but patient reported meds in interview
+        if med_turns and not doc_meds:
+            for idx, mt in enumerate(med_turns):
+                fields.append({
+                    "field_id": f"sf_med_{idx+1}",
+                    "section": SummarySection.MEDICATIONS.value,
+                    "content": f"Active medications: {mt.get('answer')}",
+                    "sources": [
+                        {
+                            "type": "transcript",
+                            "ref_id": mt.get("question_id", "q_med_01"),
+                            "snippet": mt.get("answer"),
+                        }
+                    ],
+                    "verification": "patient_reported",
+                })
+
+        # 5. Allergies
+        all_turns = [t for t in transcripts if "all" in t.get("question_id", "").lower() or "allergies" in t.get("node_name", "").lower()]
+        for idx, at in enumerate(all_turns):
             fields.append({
-                "field_id": "sf_med_01",
-                "section": "medications",
-                "content": f"Active medications: {med_turn.get('answer')}",
+                "field_id": f"sf_all_{idx+1}",
+                "section": SummarySection.ALLERGIES.value,
+                "content": f"Allergy status: {at.get('answer')}",
                 "sources": [
                     {
                         "type": "transcript",
-                        "ref_id": med_turn.get("question_id", "q_med_01"),
-                        "snippet": med_turn.get("answer"),
+                        "ref_id": at.get("question_id", "q_all_01"),
+                        "snippet": at.get("answer"),
                     }
                 ],
                 "verification": "patient_reported",
             })
 
-        # 4. Allergies
-        all_turn = next((t for t in transcripts if "all" in t.get("question_id", "") or "allergies" in t.get("node_name", "")), None)
-        if all_turn:
+        # 6. Family & Personal History (Canonical section: family_personal)
+        fam_pers_turns = [
+            t for t in transcripts
+            if any(k in t.get("question_id", "").lower() or k in t.get("node_name", "").lower() for k in ["family", "personal", "fam", "pers"])
+        ]
+        for idx, fpt in enumerate(fam_pers_turns):
             fields.append({
-                "field_id": "sf_all_01",
-                "section": "allergies",
-                "content": f"Allergy status: {all_turn.get('answer')}",
+                "field_id": f"sf_fam_pers_{idx+1}",
+                "section": SummarySection.FAMILY_PERSONAL.value,
+                "content": f"Family & Personal History: {fpt.get('answer')}",
                 "sources": [
                     {
                         "type": "transcript",
-                        "ref_id": all_turn.get("question_id", "q_all_01"),
-                        "snippet": all_turn.get("answer"),
+                        "ref_id": fpt.get("question_id", "q_family_01"),
+                        "snippet": fpt.get("answer"),
+                    }
+                ],
+                "verification": "patient_reported",
+            })
+
+        # 7. Review of Systems (ROS)
+        ros_turns = [t for t in transcripts if "ros" in t.get("question_id", "").lower() or "ros" in t.get("node_name", "").lower()]
+        for idx, rt in enumerate(ros_turns):
+            fields.append({
+                "field_id": f"sf_ros_{idx+1}",
+                "section": SummarySection.ROS.value,
+                "content": f"Review of systems: {rt.get('answer')}",
+                "sources": [
+                    {
+                        "type": "transcript",
+                        "ref_id": rt.get("question_id", "q_ros_01"),
+                        "snippet": rt.get("answer"),
                     }
                 ],
                 "verification": "patient_reported",
             })
 
         return fields
-
-    async def _load_fallback_entities(
-        self,
-        session_id: str,
-        db: AsyncSession,
-    ) -> list[ExtractedEntityModel]:
-        """
-        Seeds sample prescription and lab entities into extracted_entities table
-        for testing and demo consistency.
-        """
-        sample_path = (
-            settings.DATA_DIR / "sample_docs" / "doc_01_prescription_printed.json"
-        )
-        if not sample_path.exists():
-            return []
-
-        seeded: list[ExtractedEntityModel] = []
-        try:
-            with open(sample_path, encoding="utf-8") as f:
-                data = json.load(f)
-
-            doc_id = data.get("document_id", "doc_01_prescription_printed")
-            for ent in data.get("entities", []):
-                new_ent = ExtractedEntityModel(
-                    id=f"ent_{uuid.uuid4().hex[:12]}",
-                    document_id=doc_id,
-                    session_id=session_id,
-                    entity_type=ent.get("type", "medication"),
-                    value=ent.get("value", ""),
-                    generic_name=ent.get("generic"),
-                    date=ent.get("date"),
-                    bounding_box=ent.get("bbox"),
-                    confidence=float(ent.get("confidence", 0.95)),
-                )
-                db.add(new_ent)
-                seeded.append(new_ent)
-
-            await db.commit()
-            logger.info(f"Loaded {len(seeded)} pre-seeded document entities for session {session_id}")
-        except Exception as e:
-            logger.warning(f"Unable to pre-seed fallback entities: {e}")
-
-        return seeded
 
 
 summary_generator = SummaryGenerator()

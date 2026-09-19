@@ -18,6 +18,9 @@ logger = logging.getLogger("medikiosk.lab_flagging")
 RANGES_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "lab_ranges.json"
 
 
+from app.services.lab_parser import lab_parser
+
+
 class LabFlaggingEngine:
     """Evaluates lab values against Indian OPD clinical normal ranges."""
 
@@ -69,44 +72,19 @@ class LabFlaggingEngine:
         return None
 
     def _extract_numeric_value(self, value_str: str) -> Tuple[float | None, str | None]:
-        """
-        Extract numerical reading and any embedded unit from a value string.
-        Examples:
-          "14.5 g/dL" -> (14.5, "g/dL")
-          "5.8 %"     -> (5.8, "%")
-          "38 U/L"    -> (38.0, "U/L")
-        """
-        if not value_str:
-            return None, None
-
-        # Look for leading numbers (including decimals)
-        match = re.search(r"([><=]?\s*(\d+(?:\.\d+)?))\s*([a-zA-Z%\/\^]+)?", value_str.strip())
-        if not match:
-            return None, None
-
-        num_part = match.group(2)
-        unit_part = match.group(3)
-
-        try:
-            val = float(num_part)
-            return val, unit_part
-        except ValueError:
-            return None, None
+        """Delegates to StructuredLabParser."""
+        parsed = lab_parser.parse(value_str)
+        return parsed.effective_value, parsed.unit
 
     def _normalize_unit(self, unit: str | None) -> str:
-        if not unit:
-            return ""
-        clean = unit.strip().lower()
-        clean = clean.replace(" ", "")
-        clean = clean.replace("cu.mm", "cumm").replace("cells/cumm", "/cumm").replace("cells/ul", "/cumm")
-        return clean
+        return lab_parser.normalize_unit(unit) or ""
 
     def evaluate_lab_value(
         self,
         test_name: str,
         value_text: str,
         unit: str | None = None,
-        gender: str = "male",
+        gender: str = "default",
     ) -> Tuple[bool | None, str | None]:
         """
         Evaluate if a lab entity is abnormal.
@@ -116,43 +94,73 @@ class LabFlaggingEngine:
             is_abnormal:
               - True: verified outside normal bounds
               - False: verified within normal bounds
-              - None: unverified (e.g. unknown test or unit mismatch)
+              - None: unverified (e.g. unknown test, unit mismatch, missing unit)
         """
-        key = self._match_test_key(test_name)
+        # Parse value text using structured lab parser
+        parsed = lab_parser.parse(value_text, test_name=test_name, explicit_unit=unit)
+        if parsed.status == "cannot_verify" or parsed.effective_value is None:
+            return None, None
+
+        key = parsed.test_key or self._match_test_key(test_name)
         if not key or key not in self.ranges:
             return None, None
 
         config = self.ranges[key]
-        num_val, embedded_unit = self._extract_numeric_value(value_text)
-        if num_val is None:
-            return None, None
 
-        extracted_unit = unit or embedded_unit or ""
+        # Select target demographic range explicitly
+        gender_norm = (gender or "default").lower().strip()
+        if gender_norm in ("female", "f", "woman", "girl"):
+            demog_key = "female"
+        elif gender_norm in ("male", "m", "man", "boy"):
+            demog_key = "male"
+        else:
+            demog_key = "default"
 
-        # Select target demographic range
-        gender_key = gender.lower() if gender else "default"
-        spec = config.get(gender_key) or config.get("normal") or config.get("default")
+        spec = config.get(demog_key) or config.get("normal") or config.get("default")
         if not spec:
             return None, None
 
         ref_unit = spec.get("unit", "")
-        low = spec.get("low", 0.0)
-        high = spec.get("high", float("inf"))
+        low = float(spec.get("low", 0.0))
+        high = float(spec.get("high", float("inf")))
         ref_range_str = f"{low} - {high} {ref_unit}".strip()
 
         # Strict Unit Mismatch Defense:
         # If an extracted unit is present, compare against reference unit
+        extracted_unit = parsed.unit
         if extracted_unit:
             norm_extracted = self._normalize_unit(extracted_unit)
             norm_ref = self._normalize_unit(ref_unit)
             if norm_extracted and norm_ref and norm_extracted != norm_ref:
                 logger.info(
-                    f"Lab unit mismatch for {key}: extracted '{extracted_unit}', "
-                    f"expected '{ref_unit}'. Marking is_abnormal=None"
+                    f"Lab unit mismatch for {key}: extracted '{extracted_unit}' ({norm_extracted}), "
+                    f"expected '{ref_unit}' ({norm_ref}). Marking is_abnormal=None"
                 )
                 return None, ref_range_str
+        elif ref_unit:
+            # Unit missing on a test that has expected units: unverified
+            logger.info(f"Missing required unit '{ref_unit}' for lab test {key}. Marking unverified.")
+            return None, ref_range_str
 
-        # Compare value
+        num_val = parsed.effective_value
+
+        # Comparator handling: <, <=, >, >=
+        if parsed.comparator in ("<", "<="):
+            if num_val <= high:
+                # e.g. < 5.7% for HbA1c where normal is <= 5.7% -> verified normal
+                return False, ref_range_str
+            else:
+                return True, ref_range_str
+        elif parsed.comparator in (">", ">="):
+            if num_val > high:
+                # e.g. > 10.0% for HbA1c -> verified abnormal high
+                return True, ref_range_str
+            elif num_val >= low:
+                return False, ref_range_str
+            else:
+                return None, ref_range_str
+
+        # Standard numeric evaluation
         is_abnormal = bool(num_val < low or num_val > high)
         return is_abnormal, ref_range_str
 

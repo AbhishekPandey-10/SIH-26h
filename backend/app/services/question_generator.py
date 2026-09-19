@@ -238,48 +238,90 @@ class QuestionGenerator:
         self,
         answer: str,
         matched_keywords: list[str],
+        question_context: str | None = None,
     ) -> dict[str, Any]:
         """
         Gemini verification of red-flag emergency:
-        Checks if the statement indicates a genuine medical emergency with >80% confidence.
+        Strictly parses confirmation. Any failure, malformed JSON, missing fields,
+        or uncertain output preserves the rule candidate (fail-safe).
         """
-        client = self._get_client()
         keywords_str = ", ".join(matched_keywords)
+        client = self._get_client()
 
         if client:
             try:
+                context_str = f'Question asked: "{question_context}"\n' if question_context else ""
                 prompt = (
+                    f"{context_str}"
                     f'Patient statement: "{answer}"\n'
                     f"Does this indicate any of these emergencies: {keywords_str}?\n\n"
                     f"Output strictly as JSON:\n"
-                    f'{{ "is_emergency": bool, "matched_rule": str, "confidence": float }}\n'
-                    f"Only return true for is_emergency if you are >80% confident this is a genuine medical emergency."
+                    f'{{"is_emergency": true|false, "matched_rule": str, "confidence": float}}\n'
+                    f"Only return false if you are certain this is NOT a medical emergency."
                 )
                 response = gemini_call_with_retry(client, self.model_name, prompt)
-                if response is None:
-                    raise RuntimeError("Gemini retries exhausted")
-                raw_text = response.text.strip()
-                match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
-                if match:
-                    result = json.loads(match.group(0))
-                    confidence = float(result.get("confidence", 0.0))
-                    is_emerg = bool(result.get("is_emergency", False)) and (confidence >= 0.80)
-                    return {
-                        "is_emergency": is_emerg,
-                        "matched_rule": result.get("matched_rule", keywords_str),
-                        "confidence": confidence,
-                    }
-            except Exception as e:
-                logger.warning(f"Gemini emergency confirmation error: {e}; using keyword certainty fallback.")
+                if response is not None and response.text:
+                    raw_text = response.text.strip()
+                    match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
+                    if match:
+                        result = json.loads(match.group(0))
+                        
+                        # Strict boolean parsing
+                        raw_is_emerg = result.get("is_emergency")
+                        is_emerg: bool | None = None
+                        if isinstance(raw_is_emerg, bool):
+                            is_emerg = raw_is_emerg
+                        elif isinstance(raw_is_emerg, str):
+                            lower_str = raw_is_emerg.strip().lower()
+                            if lower_str in ("true", "1", "yes", "t"):
+                                is_emerg = True
+                            elif lower_str in ("false", "0", "no", "f"):
+                                is_emerg = False
 
-        # High certainty fallback for life-threatening keywords
-        critical_markers = ["chest pain", "breathless", "suicid", "weakness one side", "marne", "seene mein", "allergic"]
-        is_crit = any(m in answer.lower() for m in critical_markers)
+                        # If field missing or invalid, fail safe (preserve candidate)
+                        if is_emerg is None:
+                            logger.warning("Gemini emergency confirmation output missing or invalid 'is_emergency'; preserving candidate.")
+                            return {
+                                "is_emergency": True,
+                                "matched_rule": result.get("matched_rule", keywords_str),
+                                "confidence": 0.90,
+                                "audit_status": "fail_safe_missing_field",
+                            }
+
+                        try:
+                            confidence = float(result.get("confidence", 0.9))
+                        except (ValueError, TypeError):
+                            confidence = 0.9
+
+                        # If model is uncertain (< 0.8 confidence), fail safe
+                        if confidence < 0.80:
+                            logger.info(f"Gemini confirmation confidence ({confidence}) < 0.80; preserving candidate.")
+                            return {
+                                "is_emergency": True,
+                                "matched_rule": result.get("matched_rule", keywords_str),
+                                "confidence": confidence,
+                                "audit_status": "fail_safe_low_confidence",
+                            }
+
+                        # High-confidence classification
+                        return {
+                            "is_emergency": is_emerg,
+                            "matched_rule": result.get("matched_rule", keywords_str),
+                            "confidence": confidence,
+                            "audit_status": "model_confirmed" if is_emerg else "model_rejected",
+                        }
+            except Exception as e:
+                logger.warning(f"Gemini emergency confirmation error: {e}; preserving matched rule candidate.")
+
+        # Fail-safe fallback when Gemini is unavailable, timed out, or unconfigured:
+        # Candidate matched configured emergency rules; preserve it!
         return {
-            "is_emergency": is_crit,
+            "is_emergency": True,
             "matched_rule": keywords_str,
-            "confidence": 0.95 if is_crit else 0.50,
+            "confidence": 0.95,
+            "audit_status": "fail_safe_rule_match",
         }
+
 
     def _fallback_question(
         self,

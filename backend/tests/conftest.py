@@ -15,14 +15,19 @@ from app.main import app
 def client():
     """Synchronous FastAPI test client."""
     with TestClient(app) as test_client:
+        import app.db.database as db_mod
+        db_mod._schema_ready = True
+        db_mod._schema_error = None
         yield test_client
 
 
 @pytest.fixture(autouse=True)
 async def init_test_db():
-    """Ensure all tables are created before running tests."""
-    from app.db.database import init_db
-    await init_db()
+    """Ensure all tables are created from ORM metadata and schema readiness is set for tests."""
+    import app.db.database as db_mod
+    await db_mod.init_db_for_testing()
+    db_mod._schema_ready = True
+    db_mod._schema_error = None
 
 
 @pytest.fixture

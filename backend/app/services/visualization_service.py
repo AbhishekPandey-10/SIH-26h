@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.models import Document, ExtractedEntityModel, Patient, Session
 from app.services.contradiction_detector import contradiction_detector
+from app.services.lab_parser import lab_parser
 
 logger = logging.getLogger("medikiosk.visualization_service")
 
@@ -444,57 +445,6 @@ class VisualizationService:
                 "status": c.status,
             })
 
-        # If no deltas found, provide demonstration items
-        if not delta_items:
-            delta_items = [
-                {
-                    "id": "delta_01",
-                    "field": "Amlodipine",
-                    "prefix": "+",
-                    "color": "green",
-                    "display_line": "+ Started Amlodipine 5mg",
-                    "change_type": "started",
-                    "new_value": "Amlodipine 5mg",
-                    "source_ref": {"type": "transcript", "snippet": "Doctor started Amlodipine 5mg"},
-                    "status": "unreviewed",
-                },
-                {
-                    "id": "delta_02",
-                    "field": "HbA1c",
-                    "prefix": "^",
-                    "color": "amber",
-                    "display_line": "^ HbA1c 6.2% -> 7.1%",
-                    "change_type": "discrepancy",
-                    "old_value": "6.2%",
-                    "new_value": "7.1%",
-                    "source_ref": {"type": "document", "snippet": "HbA1c: 7.1%"},
-                    "status": "unreviewed",
-                },
-                {
-                    "id": "delta_03",
-                    "field": "Glimepiride",
-                    "prefix": "v",
-                    "color": "red",
-                    "display_line": "v Stopped Glimepiride",
-                    "change_type": "stopped",
-                    "old_value": "Glimepiride 1mg",
-                    "source_ref": {"type": "transcript", "snippet": "Patient confirmed Glimepiride stopped"},
-                    "status": "unreviewed",
-                },
-                {
-                    "id": "delta_04",
-                    "field": "Metformin",
-                    "prefix": "~",
-                    "color": "amber",
-                    "display_line": "~ Metformin 500mg -> 1000mg",
-                    "change_type": "dosage_change",
-                    "old_value": "500mg",
-                    "new_value": "1000mg",
-                    "source_ref": {"type": "transcript", "snippet": "Dose titrated to 1000mg BD"},
-                    "status": "unreviewed",
-                },
-            ]
-
         return {
             "session_id": session_id,
             "last_visit_date": last_visit_date,
@@ -538,16 +488,11 @@ class VisualizationService:
 
 
     def _parse_numeric_value(self, text: str) -> Optional[float]:
-        """Extracts first valid floating point number from lab text."""
+        """Extracts normalized numeric value using StructuredLabParser."""
         if not text:
             return None
-        match = re.search(r"(\d+(?:\.\d+)?)", text)
-        if match:
-            try:
-                return float(match.group(1))
-            except ValueError:
-                return None
-        return None
+        parsed = lab_parser.parse(text)
+        return parsed.effective_value
 
     def _extract_unit(self, text: str) -> Optional[str]:
         """Extracts unit from string like 'HbA1c 7.1%' or '1.2 mg/dL'."""

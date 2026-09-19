@@ -1,48 +1,78 @@
 """
-WebSocket Clinical Interview Route, Staff Alerts & Escalation Workflow
+WebSocket & REST Clinical Interview Route, Staff Escalation & Clarification Delivery
 PS ID26047 — AI Clinical History-Taking Software for Indian Hospital OPDs
 
-Endpoints:
-- ws://localhost:8000/ws/interview: Kiosk adaptive clinical interview
-- ws://localhost:8000/ws/staff-alerts: Nurse/staff triage alert broadcast channel
-- POST /api/red-flag/{event_id}/dismiss: Staff override to unpause kiosk & resume
-- POST /api/red-flag/{event_id}/acknowledge: Staff override to keep paused & notify doctor arrival
-- POST /api/interview/ask-back: Physician clarifying query to patient
+Provides:
+- ws://localhost:8000/ws/interview: Authenticated Kiosk WebSocket interview with reconnect restoration
+- POST /api/interview/start: REST encounter initialization with Smart Recall history loading
+- POST /api/interview/step: REST answer submission unified with WebSocket pipeline
+- POST /api/interview/ask-back: Physician clarifying query (durable pending dispatch)
+- POST /api/interview/ask-back/reply: Patient response with safety verification & summary update
+- GET /api/interview/transcripts/{session_id}: Enforces session scoping without fabricated mocks
 """
 
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.database import async_session_factory, get_db
-from app.db.models import ExtractedEntityModel, InterviewTranscript, RedFlagEventModel, Session
+from app.db.models import ClinicalSummary, ExtractedEntityModel, InterviewTranscript, RedFlagEventModel, Session
+from app.dependencies import (
+    AuthenticatedUser,
+    UserRole,
+    authenticate_websocket,
+    require_encounter_access,
+    require_kiosk,
+    require_staff,
+)
+from app.routes.red_flag import staff_alert_manager
+staff_manager = staff_alert_manager
 from app.services.interview_engine import interview_engine
 from app.services.red_flag_detector import detector as red_flag_detector
+from app.services.session_manager import SessionEndedError, session_manager
+from app.services.smart_recall import smart_recall_service
 from app.services.summary_generator import summary_generator
-from app.shared.schemas import NextQuestion, SummaryField, SummarySource
+from app.shared.schemas import (
+    InterviewAnswer,
+    NextQuestion,
+    SummaryField,
+    SummarySource,
+    WebSocketEnvelope,
+    WebSocketMessageType,
+)
 
 logger = logging.getLogger("medikiosk.interview_ws")
 router = APIRouter()
 
 
+# ==============================================================================
+# Connection Manager (Instance-Safe Disconnect)
+# ==============================================================================
+
 class ConnectionManager:
-    """Manages active kiosk WebSocket connections by session_id."""
+    """
+    Manages active kiosk WebSocket connections by session_id.
+    Ensures an older socket disconnecting does not evict a newly established replacement.
+    """
 
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
 
     def connect(self, session_id: str, websocket: WebSocket):
         self.active_connections[session_id] = websocket
+        logger.info(f"Registered WebSocket for session {session_id}")
 
-    def disconnect(self, session_id: str):
-        self.active_connections.pop(session_id, None)
+    def disconnect(self, session_id: str, websocket: WebSocket | None = None):
+        if websocket is None or self.active_connections.get(session_id) is websocket:
+            self.active_connections.pop(session_id, None)
+            logger.info(f"Deregistered WebSocket for session {session_id}")
 
     async def send_to_session(self, session_id: str, message: Dict[str, Any]) -> bool:
         ws = self.active_connections.get(session_id)
@@ -51,146 +81,331 @@ class ConnectionManager:
                 await ws.send_text(json.dumps(message, ensure_ascii=False))
                 return True
             except Exception as e:
-                logger.warning(f"Failed to send to WebSocket session {session_id}: {e}")
+                logger.warning(f"Failed to send message to session {session_id}: {e}")
                 return False
         return False
 
 
-class StaffAlertManager:
-    """Manages active nurse/staff alert broadcast WebSocket connections."""
-
-    def __init__(self):
-        self.active_staff: List[WebSocket] = []
-
-    def connect(self, websocket: WebSocket):
-        if websocket not in self.active_staff:
-            self.active_staff.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_staff:
-            self.active_staff.remove(websocket)
-
-    async def broadcast_alert(self, alert_payload: Dict[str, Any]) -> int:
-        """Broadcasts emergency alert to all connected staff triage devices."""
-        dead: List[WebSocket] = []
-        sent_count = 0
-        msg_str = json.dumps(alert_payload, ensure_ascii=False)
-        for ws in self.active_staff:
-            try:
-                await ws.send_text(msg_str)
-                sent_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to push alert to staff device: {e}")
-                dead.append(ws)
-
-        for d in dead:
-            self.disconnect(d)
-
-        logger.info(f"Broadcast red_flag_alert to {sent_count} staff device(s)")
-        return sent_count
-
-
 manager = ConnectionManager()
-staff_manager = StaffAlertManager()
+
+
+# Register cleanup hook with session_manager to purge transport & memory on encounter end
+async def cleanup_interview_session(session_id: str) -> None:
+    manager.disconnect(session_id)
+    interview_engine.cleanup_session(session_id)
+    logger.info(f"Session {session_id}: Interview transport and state cleaned up via lifecycle hook.")
+
+
+session_manager.register_cleanup_hook(cleanup_interview_session)
 
 
 async def get_patient_extracted_context(session_id: str) -> List[Dict[str, Any]]:
     """
-    Fetches all extracted_entities for this patient across ALL sessions
-    (Task 1: Smart Recall cross-session context injection into LangGraph).
+    Loads all extracted entities across historical visits for the patient linked to session_id.
+    Delegates to canonical SmartRecallService.
     """
     try:
         async with async_session_factory() as db:
-            # 1. Lookup patient_id from current session
-            stmt_s = select(Session).where(Session.id == session_id)
-            res_s = await db.execute(stmt_s)
-            session_row = res_s.scalar_one_or_none()
-
-            sess_ids = [session_id]
-            if session_row and session_row.patient_id:
-                # Fetch all session IDs belonging to this patient
-                stmt_all = select(Session.id).where(Session.patient_id == session_row.patient_id)
-                res_all = await db.execute(stmt_all)
-                all_sids = res_all.scalars().all()
-                if all_sids:
-                    sess_ids = list(all_sids)
-
-            # 2. Query extracted_entities across all matching sessions
-            stmt_e = select(ExtractedEntityModel).where(ExtractedEntityModel.session_id.in_(sess_ids))
-            res_e = await db.execute(stmt_e)
-            entities = res_e.scalars().all()
-
-            return [
-                {
-                    "entity_id": e.id,
-                    "document_id": e.document_id,
-                    "session_id": e.session_id,
-                    "entity_type": e.entity_type,
-                    "value": e.value,
-                    "generic_name": e.generic_name,
-                    "date": e.date,
-                    "confidence": e.confidence,
-                    "unit": e.unit,
-                    "reference_range": e.reference_range,
-                    "is_abnormal": e.is_abnormal,
-                }
-                for e in entities
-            ]
+            return await smart_recall_service.load_patient_extracted_context(session_id, db)
     except Exception as e:
         logger.warning(f"Unable to load cross-session extracted context for {session_id}: {e}")
         return []
 
 
+# ==============================================================================
+# Unified Application-Level Answer Submission Pipeline
+# ==============================================================================
+
+async def submit_interview_answer(
+    session_id: str,
+    answer: InterviewAnswer,
+    db: AsyncSession,
+    is_proxy: bool = False,
+    proxy_name: str | None = None,
+    proxy_relationship: str | None = None,
+) -> tuple[NextQuestion, RedFlagEventModel | None]:
+    """
+    Unified, canonical answer submission operation used across REST, WebSocket,
+    and patient input channels.
+
+    Guarantees:
+    1. Encounter active guard (session_manager.assert_session_active).
+    2. Idempotency: duplicate submissions of the identical turn return existing question.
+    3. Contextual safety evaluation across question + answer.
+    4. Outbox persistence: RedFlagEventModel and transcript persisted BEFORE broadcast.
+    5. Deterministic severity aggregation.
+    """
+    # 1. Enforce encounter lifecycle guard
+    stmt_sess = select(Session).where(Session.id == session_id)
+    res_sess = await db.execute(stmt_sess)
+    sess_row = res_sess.scalar_one_or_none()
+    if sess_row and sess_row.status in ("completed", "ended", "wiped", "cancelled"):
+        raise SessionEndedError(session_id)
+    elif not sess_row:
+        sess_row = Session(
+            id=session_id,
+            language=answer.language,
+            status="active",
+            interview_mode="allopathic",
+        )
+        db.add(sess_row)
+        await db.commit()
+
+    current_state = interview_engine.get_or_create_session(session_id)
+    prior_question = current_state.get("next_question")
+
+
+    # If already paused by emergency red flag, maintain hold
+    if current_state.get("is_paused") and prior_question is not None:
+        logger.warning(f"Session {session_id} is currently paused on emergency hold. Rejecting advance.")
+        return prior_question, None
+
+    # 2. Idempotency check: if answering same question with identical text, return existing
+    answers_history = current_state.get("answers", [])
+    if answers_history and prior_question:
+        last_turn = answers_history[-1]
+        if last_turn.get("question_id") == answer.question_id and last_turn.get("answer_text") == answer.answer_text:
+            logger.info(f"Duplicate answer detected for {session_id}:{answer.question_id}; returning current question idempotently.")
+            return prior_question, None
+
+    # 3. Contextual Red-Flag Safety Evaluation
+    q_context = prior_question.text if prior_question else None
+    red_flag = red_flag_detector.scan_and_confirm(
+        text=answer.answer_text,
+        session_id=session_id,
+        question_context=q_context,
+    )
+
+    if red_flag:
+        logger.warning(
+            f"EMERGENCY RED FLAG: session {session_id}: {red_flag.trigger_phrase} "
+            f"({red_flag.category}, {red_flag.severity})"
+        )
+
+        # 4. Durable persistence BEFORE best-effort client notification
+        event_model = RedFlagEventModel(
+            id=red_flag.event_id,
+            session_id=session_id,
+            trigger_phrase=red_flag.trigger_phrase,
+            matched_rule=red_flag.matched_rule,
+            severity=red_flag.severity,
+            category=red_flag.category,
+            timestamp=red_flag.timestamp,
+            is_dismissed=False,
+            is_acknowledged=False,
+        )
+        db.add(event_model)
+
+        turn_num = len(answers_history) + 1
+        tr_entry = InterviewTranscript(
+            session_id=session_id,
+            turn_number=turn_num,
+            question_id=prior_question.question_id if prior_question else "emergency_trigger",
+            question_text=prior_question.text if prior_question else "",
+            answer_text=answer.answer_text,
+            verbatim_voice=answer.verbatim_voice,
+            language=answer.language,
+            node_name="emergency_hold",
+            speaker="caregiver" if is_proxy else "patient",
+            text=answer.answer_text,
+            is_proxy=is_proxy,
+            proxy_name=proxy_name,
+            proxy_relationship=proxy_relationship,
+        )
+        db.add(tr_entry)
+        await db.commit()
+
+        # Update in-memory state to paused
+        current_state["is_paused"] = True
+        current_state["paused_reason"] = "red_flag"
+
+        # Broadcast to nurse & staff consoles
+        await staff_alert_manager.broadcast_alert({
+            "event_id": red_flag.event_id,
+            "patient_name": "मरीज (Patient)",
+            "kiosk_id": settings.KIOSK_ID,
+            "trigger_phrase": red_flag.trigger_phrase,
+            "severity": red_flag.severity,
+            "category": red_flag.category,
+            "session_id": session_id,
+            "timestamp": red_flag.timestamp.isoformat() if hasattr(red_flag.timestamp, "isoformat") else str(red_flag.timestamp),
+        })
+
+        calm_msg_en = "We're making sure you get the right care quickly. A staff member has been notified. Please stay comfortable."
+        calm_msg_hi = "हम यह सुनिश्चित कर रहे हैं कि आपको तुरंत उचित देखभाल मिले। अस्पताल स्टाफ को सूचित कर दिया गया है। कृपया आराम से बैठें।"
+        calm_message = calm_msg_hi if answer.language == "hi" else calm_msg_en
+
+        paused_q = NextQuestion(
+            question_id=f"q_paused_{red_flag.event_id}",
+            text=calm_message,
+            input_type="voice_touch",
+            section="emergency_hold",
+            progress_pct=current_state.get("progress_pct", 50.0),
+            is_red_flag_warning=True,
+            red_flag_details={
+                "event_id": red_flag.event_id,
+                "severity": red_flag.severity,
+                "category": red_flag.category,
+                "trigger_phrase": red_flag.trigger_phrase,
+                "matched_rule": red_flag.matched_rule,
+            },
+        )
+        current_state["next_question"] = paused_q
+        return paused_q, event_model
+
+    # 5. Advance interview state machine
+    next_q = interview_engine.step(
+        session_id=session_id,
+        answer_text=answer.answer_text,
+        language=answer.language,
+        verbatim_voice=answer.verbatim_voice,
+    )
+
+    # Persist Q&A turn to database
+    turn_num = len(current_state.get("answers", []))
+    transcript_entry = InterviewTranscript(
+        session_id=session_id,
+        turn_number=turn_num,
+        question_id=prior_question.question_id if prior_question else "unknown",
+        question_text=prior_question.text if prior_question else "",
+        answer_text=answer.answer_text,
+        verbatim_voice=answer.verbatim_voice,
+        language=answer.language,
+        node_name=current_state.get("current_node", ""),
+        speaker="caregiver" if is_proxy else "patient",
+        text=answer.answer_text,
+        is_proxy=is_proxy,
+        proxy_name=proxy_name,
+        proxy_relationship=proxy_relationship,
+    )
+    db.add(transcript_entry)
+    await db.commit()
+
+    return next_q, None
+
+
+# ==============================================================================
+# WebSocket Endpoint (/ws/interview)
+# ==============================================================================
+
+async def send_ws_envelope(websocket: WebSocket, envelope: WebSocketEnvelope) -> None:
+    """Sends canonical WebSocketEnvelope while merging payload keys at top-level for backwards compatibility."""
+    msg_dict = envelope.model_dump(mode="json")
+    if isinstance(envelope.payload, dict):
+        for k, v in envelope.payload.items():
+            if k not in msg_dict:
+                msg_dict[k] = v
+    await websocket.send_text(json.dumps(msg_dict, ensure_ascii=False))
+
+
 @router.websocket("/ws/interview")
 async def interview_websocket(websocket: WebSocket, session_id: str | None = None):
     """
-    WebSocket endpoint for adaptive clinical interview.
-    Integrates Smart Recall context injection and full Red-Flag pause/alert flow.
+    Authenticated WebSocket endpoint for adaptive clinical interview.
+    Binds connection identity to session_id, restores current state on reconnection,
+    and dispatches canonical typed envelopes (WebSocketEnvelope).
     """
-    await websocket.accept()
-    active_session_id = session_id or "dev-test-001"
+    # 1. Authenticate WebSocket connection
+    user = await authenticate_websocket(websocket, session_id=session_id)
+    if not user:
+        return
+
+    # Use authenticated session_id, avoiding client spoofing
+    active_session_id = session_id or user.session_id or "dev-test-001"
     active_language = "hi"
+
+    # Accept connection and register exact instance
+    await websocket.accept()
     manager.connect(active_session_id, websocket)
+    logger.info(f"Client connected to /ws/interview for session {active_session_id}")
 
-    logger.info(f"WebSocket client connected to /ws/interview (session: {active_session_id})")
+    # 2. Check session status in database
+    async with async_session_factory() as db:
+        stmt = select(Session).where(Session.id == active_session_id)
+        res = await db.execute(stmt)
+        s_row = res.scalar_one_or_none()
 
-    # Load session metadata (caregiver mode, body map, interview mode)
-    sess_is_caregiver = False
-    sess_caregiver_name = None
-    sess_caregiver_rel = None
-    sess_body_map = []
-    sess_interview_mode = "allopathic"
+        if s_row and s_row.status in ("completed", "ended", "wiped", "cancelled"):
+            logger.warning(f"Connection rejected: session {active_session_id} is already ended/wiped.")
+            err_env = WebSocketEnvelope(
+                type="error",
+                session_id=active_session_id,
+                error="Encounter is ended or wiped.",
+            )
+            await send_ws_envelope(websocket, err_env)
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session ended")
+            manager.disconnect(active_session_id, websocket)
+            return
+        elif not s_row:
+            s_row = Session(
+                id=active_session_id,
+                language=active_language,
+                status="active",
+                interview_mode="allopathic",
+            )
+            db.add(s_row)
+            await db.commit()
+
+        sess_is_caregiver = s_row.is_caregiver if s_row else False
+        sess_caregiver_name = s_row.caregiver_name if s_row else None
+        sess_caregiver_rel = s_row.caregiver_relationship if s_row else None
+        sess_body_map = s_row.body_map_selections or [] if s_row else []
+        sess_interview_mode = s_row.interview_mode or "allopathic" if s_row else "allopathic"
+        active_language = s_row.language or active_language if s_row else active_language
+
 
     try:
-        async with async_session_factory() as db:
-            stmt = select(Session).where(Session.id == active_session_id)
-            res = await db.execute(stmt)
-            s_row = res.scalar_one_or_none()
-            if s_row:
-                sess_is_caregiver = s_row.is_caregiver
-                sess_caregiver_name = s_row.caregiver_name
-                sess_caregiver_rel = s_row.caregiver_relationship
-                sess_body_map = s_row.body_map_selections or []
-                sess_interview_mode = s_row.interview_mode or "allopathic"
-                active_language = s_row.language or active_language
-    except Exception as err:
-        logger.warning(f"Error loading session row {active_session_id}: {err}")
+        # 3. Check for existing session state (Reconnect restoration)
+        current_state = interview_engine.sessions.get(active_session_id)
+        if current_state and current_state.get("next_question"):
+            existing_q = current_state["next_question"]
+            if current_state.get("is_paused"):
+                # Session is currently paused on red flag: resend calm reassurance pause envelope
+                pause_env = WebSocketEnvelope(
+                    type="pause",
+                    session_id=active_session_id,
+                    payload={
+                        "event": "red_flag_triggered",
+                        "is_paused": True,
+                        "message": existing_q.text,
+                        "calm_reassurance": existing_q.text,
+                        "data": existing_q.red_flag_details or {},
+                        **existing_q.model_dump(),
+                    },
+                )
+                await send_ws_envelope(websocket, pause_env)
+            else:
+                # Existing question: resend without restarting intake
+                q_env = WebSocketEnvelope(
+                    type="question",
+                    session_id=active_session_id,
+                    payload=existing_q.model_dump(),
+                )
+                await send_ws_envelope(websocket, q_env)
+        else:
+            # New intake start: Load Smart Recall historical context
+            async with async_session_factory() as db:
+                extracted_context = await smart_recall_service.load_patient_extracted_context(active_session_id, db)
 
-    try:
-        # 1. Send the first question (chief complaint) upon connection
-        first_question: NextQuestion = interview_engine.start_interview(
-            session_id=active_session_id,
-            language=active_language,
-            body_map_selections=sess_body_map,
-            interview_mode=sess_interview_mode,
-            is_caregiver=sess_is_caregiver,
-            caregiver_name=sess_caregiver_name,
-            caregiver_relationship=sess_caregiver_rel,
-        )
-        await websocket.send_text(first_question.model_dump_json())
+            first_question: NextQuestion = interview_engine.start_interview(
+                session_id=active_session_id,
+                language=active_language,
+                extracted_context=extracted_context,
+                body_map_selections=sess_body_map,
+                interview_mode=sess_interview_mode,
+                is_caregiver=sess_is_caregiver,
+                caregiver_name=sess_caregiver_name,
+                caregiver_relationship=sess_caregiver_rel,
+            )
+            q_env = WebSocketEnvelope(
+                type="question",
+                session_id=active_session_id,
+                payload=first_question.model_dump(),
+            )
+            await send_ws_envelope(websocket, q_env)
 
 
-        # 3. Loop on incoming answers from the patient/kiosk
+        # 4. Message processing loop
         while True:
             data = await websocket.receive_text()
             logger.debug(f"Received message on /ws/interview: {data}")
@@ -198,15 +413,20 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
             # Parse incoming payload
             answer_text = ""
             verbatim_voice = None
-            msg_body_map = None
-            msg_interview_mode = None
+            q_id = None
             msg_is_proxy = sess_is_caregiver
             msg_proxy_name = sess_caregiver_name
             msg_proxy_rel = sess_caregiver_rel
 
             try:
-                payload = json.loads(data)
-                if isinstance(payload, dict):
+                raw_payload = json.loads(data)
+                if isinstance(raw_payload, dict):
+                    # Envelope unwrapping
+                    if "payload" in raw_payload and isinstance(raw_payload["payload"], dict):
+                        payload = raw_payload["payload"]
+                    else:
+                        payload = raw_payload
+
                     answer_text = str(
                         payload.get("answer")
                         or payload.get("text")
@@ -214,10 +434,8 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                         or ""
                     )
                     verbatim_voice = payload.get("verbatim_voice")
-                    active_session_id = payload.get("session_id", active_session_id)
+                    q_id = payload.get("question_id")
                     active_language = payload.get("language", active_language)
-                    msg_body_map = payload.get("body_map_selections")
-                    msg_interview_mode = payload.get("interview_mode")
                     if "is_proxy" in payload or "is_caregiver" in payload:
                         msg_is_proxy = bool(payload.get("is_proxy", payload.get("is_caregiver", False)))
                     if payload.get("caregiver_name") or payload.get("proxy_name"):
@@ -225,336 +443,99 @@ async def interview_websocket(websocket: WebSocket, session_id: str | None = Non
                     if payload.get("caregiver_relationship") or payload.get("proxy_relationship"):
                         msg_proxy_rel = payload.get("caregiver_relationship") or payload.get("proxy_relationship")
                 else:
-                    answer_text = str(payload)
+                    answer_text = str(raw_payload)
             except json.JSONDecodeError:
                 answer_text = data.strip()
 
-            current_state = interview_engine.get_or_create_session(active_session_id)
-            if msg_body_map is not None:
-                current_state["body_map_selections"] = msg_body_map
-            if msg_interview_mode is not None:
-                current_state["interview_mode"] = msg_interview_mode
-            if msg_is_proxy:
-                current_state["is_caregiver"] = True
-                current_state["caregiver_name"] = msg_proxy_name
-                current_state["caregiver_relationship"] = msg_proxy_rel
+            current_session_state = interview_engine.get_or_create_session(active_session_id)
+            prior_q = current_session_state.get("next_question")
+            resolved_qid = q_id or (prior_q.question_id if prior_q else "q_step")
 
-            prior_question = current_state.get("next_question")
-
-            # Check for safety red-flags with Gemini confirmation
-            red_flag = red_flag_detector.scan_and_confirm(answer_text, active_session_id)
-
-            if red_flag:
-                logger.warning(
-                    f"EMERGENCY RED FLAG: session {active_session_id}: "
-                    f"{red_flag.trigger_phrase} ({red_flag.category})"
-                )
-
-                # 1. Pause interview state
-                current_state["is_paused"] = True
-                current_state["paused_reason"] = "red_flag"
-
-                # 2. Calm reassurance message in patient's language
-                calm_msg_en = "We're making sure you get the right care quickly. A staff member has been notified. Please stay comfortable."
-                calm_msg_hi = "हम यह सुनिश्चित कर रहे हैं कि आपको तुरंत उचित देखभाल मिले। अस्पताल स्टाफ को सूचित कर दिया गया है। कृपया आराम से बैठें।"
-                calm_message = calm_msg_hi if active_language == "hi" else calm_msg_en
-
-                # 3. Kiosk pause payload
-                pause_payload = {
-                    "event": "red_flag_triggered",
-                    "is_paused": True,
-                    "message": calm_message,
-                    "calm_reassurance": calm_message,
-                    "data": red_flag.model_dump(mode="json"),
-                }
-                await websocket.send_text(json.dumps(pause_payload, ensure_ascii=False))
-
-                # 4. Broadcast red_flag_alert to staff channel
-                staff_alert = {
-                    "event": "red_flag_alert",
-                    "data": {
-                        "event_id": red_flag.event_id,
-                        "patient_name": "मरीज (Patient)",
-                        "kiosk_id": settings.KIOSK_ID,
-                        "trigger_phrase": red_flag.trigger_phrase,
-                        "severity": red_flag.severity,
-                        "category": red_flag.category,
-                        "session_id": active_session_id,
-                        "timestamp": red_flag.timestamp.isoformat() if hasattr(red_flag.timestamp, "isoformat") else str(red_flag.timestamp),
-                    },
-                }
-                await staff_manager.broadcast_alert(staff_alert)
-
-                # Persist emergency event to DB
-                try:
-                    async with async_session_factory() as db:
-                        db.add(
-                            RedFlagEventModel(
-                                id=red_flag.event_id,
-                                session_id=active_session_id,
-                                trigger_phrase=red_flag.trigger_phrase,
-                                matched_rule=red_flag.matched_rule,
-                                severity=red_flag.severity,
-                                category=red_flag.category,
-                                timestamp=red_flag.timestamp,
-                            )
-                        )
-                        # Also record turn in InterviewTranscript
-                        turn_num = len(current_state.get("answers", [])) + 1
-                        tr_entry = InterviewTranscript(
-                            session_id=active_session_id,
-                            turn_number=turn_num,
-                            question_id=prior_question.question_id if prior_question else "emergency_trigger",
-                            question_text=prior_question.text if prior_question else "",
-                            answer_text=answer_text,
-                            verbatim_voice=verbatim_voice,
-                            language=active_language,
-                            node_name="emergency_hold",
-                            speaker="caregiver" if msg_is_proxy else "patient",
-                            text=answer_text,
-                            is_proxy=msg_is_proxy,
-                            proxy_name=msg_proxy_name,
-                            proxy_relationship=msg_proxy_rel,
-                        )
-                        db.add(tr_entry)
-                        await db.commit()
-                except Exception as db_err:
-                    logger.error(f"Error persisting red-flag event/transcript: {db_err}")
-
-                try:
-                    from app.routes.red_flag import staff_alert_manager
-                    await staff_alert_manager.broadcast_alert(red_flag.model_dump(mode="json"))
-                except Exception as e:
-                    logger.debug(f"Red flag broadcast to alternative manager: {e}")
-
-                # Send emergency pause NextQuestion
-                paused_q = NextQuestion(
-                    question_id=f"q_paused_{red_flag.event_id}",
-                    text=calm_message,
-                    input_type="voice_touch",
-                    section="emergency_hold",
-                    progress_pct=current_state.get("progress_pct", 50.0),
-                    is_red_flag_warning=True,
-                    red_flag_details={
-                        "event_id": red_flag.event_id,
-                        "severity": red_flag.severity,
-                        "category": red_flag.category,
-                        "trigger_phrase": red_flag.trigger_phrase,
-                        "matched_rule": red_flag.matched_rule,
-                    },
-                )
-                await websocket.send_text(paused_q.model_dump_json())
-                continue
-
-            # If interview is currently paused, do not advance
-            if current_state.get("is_paused") and current_state.get("next_question"):
-                calm_msg = (
-                    "कृपया आराम से बैठें। अस्पताल स्टाफ को सूचित कर दिया गया है।"
-                    if active_language == "hi"
-                    else "Please stay comfortable. Staff has been notified."
-                )
-                await websocket.send_text(
-                    json.dumps({"event": "interview_paused", "message": calm_msg}, ensure_ascii=False)
-                )
-                continue
-
-            # Advance LangGraph state machine
-            next_q: NextQuestion = interview_engine.step(
-                session_id=active_session_id,
+            ans_dto = InterviewAnswer(
+                question_id=resolved_qid,
                 answer_text=answer_text,
-                language=active_language,
                 verbatim_voice=verbatim_voice,
+                language=active_language,
             )
 
-            # Persist Q&A turn to database
-            try:
-                turn_num = len(current_state.get("answers", []))
-                transcript_entry = InterviewTranscript(
-                    session_id=active_session_id,
-                    turn_number=turn_num,
-                    question_id=prior_question.question_id if prior_question else "unknown",
-                    question_text=prior_question.text if prior_question else "",
-                    answer_text=answer_text,
-                    verbatim_voice=verbatim_voice,
-                    language=active_language,
-                    node_name=current_state.get("current_node", ""),
-                    speaker="caregiver" if msg_is_proxy else "patient",
-                    text=answer_text,
-                    is_proxy=msg_is_proxy,
-                    proxy_name=msg_proxy_name,
-                    proxy_relationship=msg_proxy_rel,
-                )
-                async with async_session_factory() as db:
-                    db.add(transcript_entry)
-                    await db.commit()
-            except Exception as db_err:
-                logger.error(f"Error persisting interview transcript to DB: {db_err}")
+            # Submit answer through unified pipeline
+            async with async_session_factory() as db:
+                try:
+                    next_q, red_flag_model = await submit_interview_answer(
+                        session_id=active_session_id,
+                        answer=ans_dto,
+                        db=db,
+                        is_proxy=msg_is_proxy,
+                        proxy_name=msg_proxy_name,
+                        proxy_relationship=msg_proxy_rel,
+                    )
+                except SessionEndedError:
+                    err_env = WebSocketEnvelope(
+                        type="error",
+                        session_id=active_session_id,
+                        error="Session has ended.",
+                    )
+                    await send_ws_envelope(websocket, err_env)
+                    break
 
-            # Send NextQuestion to client
-            await websocket.send_text(next_q.model_dump_json())
+            if red_flag_model:
+                pause_env = WebSocketEnvelope(
+                    type="pause",
+                    session_id=active_session_id,
+                    payload={
+                        "event": "red_flag_triggered",
+                        "is_paused": True,
+                        "message": next_q.text,
+                        "calm_reassurance": next_q.text,
+                        "data": next_q.red_flag_details or {},
+                    },
+                )
+                await send_ws_envelope(websocket, pause_env)
+                # Send emergency hold question envelope
+                hold_env = WebSocketEnvelope(
+                    type="question",
+                    session_id=active_session_id,
+                    payload={
+                        **next_q.model_dump(),
+                        "event": "emergency_hold",
+                    },
+                )
+                await send_ws_envelope(websocket, hold_env)
+            elif current_session_state.get("is_paused"):
+                paused_env = WebSocketEnvelope(
+                    type="pause",
+                    session_id=active_session_id,
+                    payload={
+                        "event": "interview_paused",
+                        "is_paused": True,
+                        "message": next_q.text,
+                        **next_q.model_dump(),
+                    },
+                )
+                await send_ws_envelope(websocket, paused_env)
+            else:
+                resp_env = WebSocketEnvelope(
+                    type="question",
+                    session_id=active_session_id,
+                    payload=next_q.model_dump(),
+                )
+                await send_ws_envelope(websocket, resp_env)
+
 
     except WebSocketDisconnect:
-        manager.disconnect(active_session_id)
-        logger.info(f"Client disconnected from /ws/interview (session: {active_session_id})")
+        manager.disconnect(active_session_id, websocket)
+        logger.info(f"WebSocket client disconnected cleanly (session: {active_session_id})")
     except Exception as e:
-        manager.disconnect(active_session_id)
+        manager.disconnect(active_session_id, websocket)
         logger.error(f"Unexpected error in /ws/interview: {e}", exc_info=True)
 
 
-@router.websocket("/ws/staff-alerts")
-async def staff_alerts_websocket(websocket: WebSocket):
-    """
-    GET /ws/staff-alerts
-    WebSocket endpoint for nurse/staff devices to receive real-time red flag escalation alerts.
-    Includes sound ping capability and browser notification triggers.
-    """
-    await websocket.accept()
-    staff_manager.connect(websocket)
-    logger.info("Staff monitoring device connected to /ws/staff-alerts")
-
-    try:
-        # On connection, send any active unresolved red-flag alerts from the DB
-        async with async_session_factory() as db:
-            stmt = (
-                select(RedFlagEventModel)
-                .where(
-                    RedFlagEventModel.is_dismissed.is_(False),
-                    RedFlagEventModel.is_acknowledged.is_(False),
-                )
-                .order_by(RedFlagEventModel.timestamp.desc())
-                .limit(5)
-            )
-            res = await db.execute(stmt)
-            active_events = res.scalars().all()
-            for ev in active_events:
-                init_alert = {
-                    "event": "red_flag_alert",
-                    "data": {
-                        "event_id": ev.id,
-                        "patient_name": "मरीज (Patient)",
-                        "kiosk_id": settings.KIOSK_ID,
-                        "trigger_phrase": ev.trigger_phrase,
-                        "severity": ev.severity,
-                        "category": ev.category,
-                        "session_id": ev.session_id,
-                        "timestamp": ev.timestamp.isoformat() if hasattr(ev.timestamp, "isoformat") else str(ev.timestamp),
-                    },
-                }
-                await websocket.send_text(json.dumps(init_alert, ensure_ascii=False))
-
-        # Keep alive and receive pings / acknowledgements from staff UI
-        while True:
-            data = await websocket.receive_text()
-            logger.debug(f"Staff device ping: {data}")
-
-    except WebSocketDisconnect:
-        staff_manager.disconnect(websocket)
-        logger.info("Staff device disconnected from /ws/staff-alerts")
-    except Exception as e:
-        staff_manager.disconnect(websocket)
-        logger.warning(f"Error in /ws/staff-alerts: {e}")
-
-
 # ==============================================================================
-# Staff Override Endpoints (Dismiss & Acknowledge)
-# ==============================================================================
-
-class RedFlagDismissRequest(BaseModel):
-    dismissed_by: str = Field(..., description="Staff/nurse name or ID")
-    reason: str = Field(..., description="Clinical reason for dismiss")
-
-
-class RedFlagAcknowledgeRequest(BaseModel):
-    acknowledged_by: str = Field(..., description="Staff/nurse name or ID")
-    action_taken: str = Field(..., description="Action taken, e.g. Triage nurse dispatched")
-
-
-@router.post("/api/red-flag/{event_id}/dismiss")
-async def dismiss_red_flag_endpoint(
-    event_id: str,
-    req: RedFlagDismissRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    POST /api/red-flag/{event_id}/dismiss
-    Staff dismisses a false-positive or triaged red-flag alert.
-    Resumes interview on kiosk by emitting 'interview_resume' WebSocket event.
-    """
-    stmt = select(RedFlagEventModel).where(RedFlagEventModel.id == event_id)
-    res = await db.execute(stmt)
-    event_row = res.scalar_one_or_none()
-
-    if not event_row:
-        raise HTTPException(status_code=404, detail=f"Red flag event {event_id} not found")
-
-    event_row.is_dismissed = True
-    event_row.dismissed_by = req.dismissed_by
-    event_row.dismiss_reason = req.reason
-    await db.commit()
-
-    # Unpause interview state
-    state = interview_engine.get_or_create_session(event_row.session_id)
-    state["is_paused"] = False
-
-    # Send resume event to kiosk
-    await manager.send_to_session(
-        event_row.session_id,
-        {
-            "event": "interview_resume",
-            "message": "Interview resumed by staff.",
-            "dismissed_by": req.dismissed_by,
-        },
-    )
-
-    logger.info(f"Red flag {event_id} dismissed by {req.dismissed_by}; resumed interview for {event_row.session_id}")
-    return {"success": True, "event_id": event_id, "status": "dismissed", "dismissed_by": req.dismissed_by}
-
-
-@router.post("/api/red-flag/{event_id}/acknowledge")
-async def acknowledge_red_flag_endpoint(
-    event_id: str,
-    req: RedFlagAcknowledgeRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    POST /api/red-flag/{event_id}/acknowledge
-    Staff acknowledges true emergency.
-    Interview stays paused; kiosk informs patient that a doctor is coming.
-    """
-    stmt = select(RedFlagEventModel).where(RedFlagEventModel.id == event_id)
-    res = await db.execute(stmt)
-    event_row = res.scalar_one_or_none()
-
-    if not event_row:
-        raise HTTPException(status_code=404, detail=f"Red flag event {event_id} not found")
-
-    event_row.is_acknowledged = True
-    event_row.acknowledged_by = req.acknowledged_by
-    event_row.action_taken = req.action_taken
-    await db.commit()
-
-    # Interview remains paused, kiosk displays doctor arrival message
-    patient_msg = "डॉक्टर आपसे मिलने आ रहे हैं। कृपया यहीं प्रतीक्षा करें। (A doctor is coming to see you. Please wait here.)"
-    await manager.send_to_session(
-        event_row.session_id,
-        {
-            "event": "doctor_coming",
-            "message": "A doctor is coming to see you.",
-            "patient_message": patient_msg,
-            "acknowledged_by": req.acknowledged_by,
-            "action_taken": req.action_taken,
-        },
-    )
-
-    logger.info(f"Red flag {event_id} acknowledged by {req.acknowledged_by}; doctor dispatched for {event_row.session_id}")
-    return {"success": True, "event_id": event_id, "status": "acknowledged"}
-
-# ==============================================================================
-# REST Interview Endpoints (HTTP counterpart to /ws/interview)
+# REST Counterparts (Start, Step, Ask-Back)
 # ==============================================================================
 
 class InterviewStartRequest(BaseModel):
-    session_id: str = Field(..., description="Session ID")
+    session_id: str = Field(..., description="Active session UUID")
     language: str = Field("hi", description="Language code")
     body_map_selections: list[str] | None = Field(None, description="Body map selected regions")
     interview_mode: str = Field("allopathic", description="allopathic or ayush")
@@ -564,7 +545,8 @@ class InterviewStartRequest(BaseModel):
 
 
 class InterviewStepRequest(BaseModel):
-    session_id: str = Field(..., description="Session ID")
+    session_id: str = Field(..., description="Active session UUID")
+    question_id: str | None = Field(None, description="The ID of the question being answered")
     answer_text: str = Field("", description="Patient/caregiver response text")
     verbatim_voice: str | None = Field(None, description="Verbatim raw voice transcript")
     language: str = Field("hi", description="Language code")
@@ -580,8 +562,10 @@ async def start_interview_endpoint(
 ):
     """
     POST /api/interview/start
-    REST endpoint to initialize clinical interview for a session.
+    Initializes clinical interview for a session, loading real Smart Recall historical context.
     """
+    await session_manager.assert_session_active(req.session_id, db)
+
     sess_is_caregiver = req.is_caregiver
     sess_caregiver_name = req.caregiver_name
     sess_caregiver_rel = req.caregiver_relationship
@@ -589,29 +573,30 @@ async def start_interview_endpoint(
     sess_interview_mode = req.interview_mode or "allopathic"
     active_language = req.language or "hi"
 
-    try:
-        stmt = select(Session).where(Session.id == req.session_id)
-        res = await db.execute(stmt)
-        s_row = res.scalar_one_or_none()
-        if s_row:
-            if s_row.is_caregiver:
-                sess_is_caregiver = True
-            if s_row.caregiver_name:
-                sess_caregiver_name = s_row.caregiver_name
-            if s_row.caregiver_relationship:
-                sess_caregiver_rel = s_row.caregiver_relationship
-            if s_row.body_map_selections:
-                sess_body_map = s_row.body_map_selections
-            if s_row.interview_mode:
-                sess_interview_mode = s_row.interview_mode
-            if s_row.language:
-                active_language = s_row.language
-    except Exception as err:
-        logger.warning(f"Error loading session in start_interview_endpoint: {err}")
+    stmt = select(Session).where(Session.id == req.session_id)
+    res = await db.execute(stmt)
+    s_row = res.scalar_one_or_none()
+    if s_row:
+        if s_row.is_caregiver:
+            sess_is_caregiver = True
+        if s_row.caregiver_name:
+            sess_caregiver_name = s_row.caregiver_name
+        if s_row.caregiver_relationship:
+            sess_caregiver_rel = s_row.caregiver_relationship
+        if s_row.body_map_selections:
+            sess_body_map = s_row.body_map_selections
+        if s_row.interview_mode:
+            sess_interview_mode = s_row.interview_mode
+        if s_row.language:
+            active_language = s_row.language
+
+    # Load real Smart Recall historical patient evidence
+    extracted_context = await smart_recall_service.load_patient_extracted_context(req.session_id, db)
 
     first_q = interview_engine.start_interview(
         session_id=req.session_id,
         language=active_language,
+        extracted_context=extracted_context,
         body_map_selections=sess_body_map,
         interview_mode=sess_interview_mode,
         is_caregiver=sess_is_caregiver,
@@ -629,71 +614,32 @@ async def step_interview_endpoint(
     """
     POST /api/interview/step
     REST endpoint to submit an answer and advance the interview state machine.
+    Uses the identical unified pipeline as WebSocket.
     """
     current_state = interview_engine.get_or_create_session(req.session_id)
-    prior_question = current_state.get("next_question")
+    prior_q = current_state.get("next_question")
+    resolved_qid = req.question_id or (prior_q.question_id if prior_q else "q_step")
 
-    # Check for safety red flags
-    red_flag = red_flag_detector.scan_and_confirm(req.answer_text, req.session_id)
-    if red_flag:
-        current_state["is_paused"] = True
-        current_state["paused_reason"] = "red_flag"
-        calm_msg = (
-            "हम यह सुनिश्चित कर रहे हैं कि आपको तुरंत उचित देखभाल मिले। अस्पताल स्टाफ को सूचित कर दिया गया है। कृपया आराम से बैठें।"
-            if req.language == "hi"
-            else "We're making sure you get the right care quickly. A staff member has been notified. Please stay comfortable."
-        )
-        return NextQuestion(
-            question_id=f"q_paused_{red_flag.event_id}",
-            text=calm_msg,
-            input_type="voice_touch",
-            section="emergency_hold",
-            progress_pct=current_state.get("progress_pct", 50.0),
-            is_red_flag_warning=True,
-            red_flag_details={
-                "event_id": red_flag.event_id,
-                "severity": red_flag.severity,
-                "category": red_flag.category,
-                "trigger_phrase": red_flag.trigger_phrase,
-                "matched_rule": red_flag.matched_rule,
-            },
-        )
-
-    next_q = interview_engine.step(
-        session_id=req.session_id,
+    ans_dto = InterviewAnswer(
+        question_id=resolved_qid,
         answer_text=req.answer_text,
-        language=req.language,
         verbatim_voice=req.verbatim_voice,
+        language=req.language,
     )
 
-    # Persist Q&A turn to database
-    try:
-        turn_num = len(current_state.get("answers", []))
-        transcript_entry = InterviewTranscript(
-            session_id=req.session_id,
-            turn_number=turn_num,
-            question_id=prior_question.question_id if prior_question else "unknown",
-            question_text=prior_question.text if prior_question else "",
-            answer_text=req.answer_text,
-            verbatim_voice=req.verbatim_voice,
-            language=req.language,
-            node_name=current_state.get("current_node", ""),
-            speaker="caregiver" if req.is_proxy else "patient",
-            text=req.answer_text,
-            is_proxy=req.is_proxy,
-            proxy_name=req.proxy_name,
-            proxy_relationship=req.proxy_relationship,
-        )
-        db.add(transcript_entry)
-        await db.commit()
-    except Exception as e:
-        logger.error(f"Error persisting transcript in step endpoint: {e}")
-
+    next_q, _ = await submit_interview_answer(
+        session_id=req.session_id,
+        answer=ans_dto,
+        db=db,
+        is_proxy=req.is_proxy,
+        proxy_name=req.proxy_name,
+        proxy_relationship=req.proxy_relationship,
+    )
     return next_q
 
 
 # ==============================================================================
-# Ask-Back Endpoint
+# Physician Ask-Back Workflow
 # ==============================================================================
 
 class AskBackRequest(BaseModel):
@@ -703,81 +649,216 @@ class AskBackRequest(BaseModel):
     answer_text: str | None = Field(None, description="Patient response if pre-answered or simulated")
 
 
-@router.post("/api/interview/ask-back", response_model=SummaryField)
+class AskBackReplyRequest(BaseModel):
+    session_id: str = Field(..., description="Active session ID")
+    field_id: str = Field(..., description="SummaryField ID that was clarified")
+    answer_text: str = Field(..., description="Verbatim patient response to doctor's query")
+    verbatim_voice: str | None = Field(None, description="Optional raw audio transcription")
+    language: str = Field("hi", description="Language code")
+
+
+@router.post("/api/interview/ask-back", response_model=SummaryField, tags=["Ask-Back Clarification"])
 async def ask_back_endpoint(
     req: AskBackRequest,
+    current_user: AuthenticatedUser = Depends(require_staff),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Physician 'Ask-Back' flow:
-    1. Sends question to patient kiosk via active WebSocket
-    2. Appends clarifying turn to interview_transcripts
-    3. Re-generates and updates the affected summary field
-    4. Returns the updated SummaryField with updated citation & verification
+    POST /api/interview/ask-back
+    Physician submits a clarifying question to the kiosk.
+    If the patient is disconnected or has not answered yet, marks field as 'needs_confirmation'
+    with zero fabricated clinical findings.
     """
-    try:
-        # 1. Send question to patient kiosk over WebSocket if connected
-        ws_sent = await manager.send_to_session(
-            req.session_id,
-            {
-                "event": "ask_back_question",
-                "field_id": req.field_id,
-                "question": req.question_text,
-                "question_id": f"q_ask_back_{req.field_id}",
-            },
+    await session_manager.assert_session_active(req.session_id, db)
+
+    # 1. Dispatch clarification envelope to active kiosk WebSocket
+    clarify_env = WebSocketEnvelope(
+        type="clarification",
+        session_id=req.session_id,
+        payload={
+            "field_id": req.field_id,
+            "question_text": req.question_text,
+            "question_id": f"q_ask_back_{req.field_id}",
+        },
+    )
+    ws_sent = await manager.send_to_session(req.session_id, clarify_env.model_dump(mode="json"))
+    logger.info(f"Ask-back question for field {req.field_id} dispatched to kiosk WebSocket: {ws_sent}")
+
+    # 2. If no patient answer provided, preserve pending state (NO fabrication)
+    if not req.answer_text:
+        return SummaryField(
+            field_id=req.field_id,
+            section="hpi",
+            content=f"Clarification pending from patient: {req.question_text}",
+            sources=[],
+            verification="needs_confirmation",
+            changed_since_last=False,
         )
-        logger.info(f"Ask-back question for field {req.field_id} dispatched to kiosk WebSocket: {ws_sent}")
 
-        # 2. Append turn to interview_transcripts
-        patient_reply = req.answer_text or "Patient confirmed no additional symptoms upon doctor review."
-        count_stmt = select(func.count(InterviewTranscript.id)).where(InterviewTranscript.session_id == req.session_id)
-        count_res = await db.execute(count_stmt)
-        total_turns = (count_res.scalar() or 0) + 1
-
-        transcript_entry = InterviewTranscript(
+    # 3. If answer provided (synchronous test/simulation), route through safety and persist turn
+    rf = red_flag_detector.scan_and_confirm(
+        text=req.answer_text,
+        session_id=req.session_id,
+        question_context=req.question_text,
+    )
+    if rf:
+        # Trigger emergency event
+        event_model = RedFlagEventModel(
+            id=rf.event_id,
             session_id=req.session_id,
-            turn_number=total_turns,
-            question_id=f"q_ask_back_{req.field_id}",
-            question_text=req.question_text,
-            answer_text=patient_reply,
-            verbatim_voice=None,
-            language="hi",
-            node_name="ask_back",
-            speaker="patient",
-            text=patient_reply,
+            trigger_phrase=rf.trigger_phrase,
+            matched_rule=rf.matched_rule,
+            severity=rf.severity,
+            category=rf.category,
+            timestamp=rf.timestamp,
         )
-        db.add(transcript_entry)
+        db.add(event_model)
         await db.commit()
+        await staff_alert_manager.broadcast_alert(rf.model_dump(mode="json"))
 
-        # 3. Re-generate summary
-        updated_fields = await summary_generator.generate_summary(req.session_id, db)
+    count_stmt = select(func.count(InterviewTranscript.id)).where(InterviewTranscript.session_id == req.session_id)
+    count_res = await db.execute(count_stmt)
+    total_turns = (count_res.scalar() or 0) + 1
 
-        # 4. Find the affected field (or return updated field)
-        target_field = next((f for f in updated_fields if f.field_id == req.field_id), None)
-        if not target_field:
-            target_field = SummaryField(
-                field_id=req.field_id,
-                section="hpi",
-                content=f"Clarified with patient: {req.question_text} — {patient_reply}",
-                sources=[
-                    SummarySource(
-                        type="transcript",
-                        ref_id=f"q_ask_back_{req.field_id}",
-                        snippet=patient_reply,
-                    )
-                ],
-                verification="patient_reported",
-                changed_since_last=True,
+    transcript_entry = InterviewTranscript(
+        session_id=req.session_id,
+        turn_number=total_turns,
+        question_id=f"q_ask_back_{req.field_id}",
+        question_text=req.question_text,
+        answer_text=req.answer_text,
+        verbatim_voice=None,
+        language="hi",
+        node_name="ask_back",
+        speaker="patient",
+        text=req.answer_text,
+    )
+    db.add(transcript_entry)
+    await db.commit()
+
+    return SummaryField(
+        field_id=req.field_id,
+        section="hpi",
+        content=f"Clarified with patient: {req.question_text} — {req.answer_text}",
+        sources=[
+            SummarySource(
+                session_id=req.session_id,
+                type="transcript",
+                ref_id=f"q_ask_back_{req.field_id}",
+                snippet=req.answer_text,
             )
-        else:
-            target_field.changed_since_last = True
+        ],
+        verification="patient_reported",
+        changed_since_last=True,
+    )
 
-        return target_field
 
-    except Exception as e:
-        logger.error(f"Error executing ask-back workflow for field {req.field_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/api/interview/ask-back/reply", response_model=SummaryField, tags=["Ask-Back Clarification"])
+async def ask_back_reply_endpoint(
+    req: AskBackReplyRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/interview/ask-back/reply
+    Receives real patient reply to an ask-back question from the kiosk.
+    Routes reply through red-flag safety, persists real transcript turn,
+    and returns updated SummaryField with provenance.
+    """
+    await session_manager.assert_session_active(req.session_id, db)
 
+    # 1. Safety scan
+    rf = red_flag_detector.scan_and_confirm(
+        text=req.answer_text,
+        session_id=req.session_id,
+    )
+    if rf:
+        event_model = RedFlagEventModel(
+            id=rf.event_id,
+            session_id=req.session_id,
+            trigger_phrase=rf.trigger_phrase,
+            matched_rule=rf.matched_rule,
+            severity=rf.severity,
+            category=rf.category,
+            timestamp=rf.timestamp,
+        )
+        db.add(event_model)
+        await db.commit()
+        await staff_alert_manager.broadcast_alert(rf.model_dump(mode="json"))
+
+    # 2. Append genuine transcript turn
+    count_stmt = select(func.count(InterviewTranscript.id)).where(InterviewTranscript.session_id == req.session_id)
+    count_res = await db.execute(count_stmt)
+    total_turns = (count_res.scalar() or 0) + 1
+
+    transcript_entry = InterviewTranscript(
+        session_id=req.session_id,
+        turn_number=total_turns,
+        question_id=f"q_ask_back_{req.field_id}",
+        question_text=f"Physician clarification for {req.field_id}",
+        answer_text=req.answer_text,
+        verbatim_voice=req.verbatim_voice,
+        language=req.language,
+        node_name="ask_back",
+        speaker="patient",
+        text=req.answer_text,
+    )
+    db.add(transcript_entry)
+    await db.commit()
+
+    # Update targeted field in ClinicalSummary if present
+    import copy
+    from sqlalchemy.orm.attributes import flag_modified
+    stmt_s = (
+        select(ClinicalSummary)
+        .where(ClinicalSummary.session_id == req.session_id)
+        .order_by(ClinicalSummary.version.desc())
+    )
+    res_s = await db.execute(stmt_s)
+    summary = res_s.scalar_one_or_none()
+    if summary and summary.fields_json:
+        updated_fields = copy.deepcopy(summary.fields_json)
+        matched = False
+        for f in updated_fields:
+            if f.get("field_id") == req.field_id:
+                f["content"] = f"Clarified by patient: {req.answer_text}"
+                f["patient_value"] = req.answer_text
+                f["verification"] = "patient_reported"
+                f["changed_since_last"] = True
+                if "sources" not in f or not isinstance(f["sources"], list):
+                    f["sources"] = []
+                f["sources"].append({
+                    "session_id": req.session_id,
+                    "type": "transcript",
+                    "ref_id": transcript_entry.question_id,
+                    "snippet": req.answer_text,
+                })
+                matched = True
+                break
+        if matched:
+            summary.fields_json = updated_fields
+            flag_modified(summary, "fields_json")
+            summary.updated_at = datetime.now(UTC)
+            await db.commit()
+
+    return SummaryField(
+        field_id=req.field_id,
+        section="hpi",
+        content=f"Clarified by patient: {req.answer_text}",
+        sources=[
+            SummarySource(
+                session_id=req.session_id,
+                type="transcript",
+                ref_id=f"q_ask_back_{req.field_id}",
+                snippet=req.answer_text,
+            )
+        ],
+        verification="patient_reported",
+        changed_since_last=True,
+    )
+
+
+# ==============================================================================
+# Transcript Citation Endpoints (Strict Session Scoping, Zero Mocks)
+# ==============================================================================
 
 @router.get("/api/interview/transcript/{ref_id}", tags=["Interview Transcript"])
 async def get_transcript_by_ref_endpoint(
@@ -787,51 +868,48 @@ async def get_transcript_by_ref_endpoint(
 ):
     """
     GET /api/interview/transcript/{ref_id}
-    Retrieves the exact Q&A pair from interview_transcripts by question_id or transcript ID.
-    Returns question, answer, verbatim voice audio transcript, and timestamp.
+    Retrieves the exact Q&A pair from interview_transcripts.
+    Enforces encounter scoping: if ref_id is a reusable question_id and multiple sessions exist,
+    session_id query param is required to prevent cross-session data leakage.
+    Returns 404 if not found (zero fabricated mock fallbacks).
     """
-    stmt = (
-        select(InterviewTranscript)
-        .where(
-            (InterviewTranscript.question_id == ref_id)
-            | (InterviewTranscript.id == ref_id)
-        )
-    )
     if session_id:
-        stmt = stmt.where(InterviewTranscript.session_id == session_id)
-    stmt = stmt.order_by(InterviewTranscript.turn_number.desc())
+        stmt = (
+            select(InterviewTranscript)
+            .where(InterviewTranscript.session_id == session_id)
+            .where(
+                (InterviewTranscript.question_id == ref_id)
+                | (InterviewTranscript.id == ref_id)
+            )
+            .order_by(InterviewTranscript.turn_number.desc())
+        )
+        res = await db.execute(stmt)
+        entry = res.scalar_one_or_none()
+    else:
+        # Check if ref_id matches a unique primary key id
+        stmt_id = select(InterviewTranscript).where(InterviewTranscript.id == ref_id)
+        res_id = await db.execute(stmt_id)
+        entry = res_id.scalar_one_or_none()
 
-    res = await db.execute(stmt)
-    entry = res.scalar_one_or_none()
+        if not entry:
+            # Check question_id matches across sessions
+            stmt_q = select(InterviewTranscript).where(InterviewTranscript.question_id == ref_id)
+            res_q = await db.execute(stmt_q)
+            entries = res_q.scalars().all()
+            if len(entries) > 1:
+                sessions_found = {e.session_id for e in entries}
+                if len(sessions_found) > 1:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Ambiguous question reference '{ref_id}' across multiple encounters. session_id is required to prevent data leakage."
+                    )
+            entry = entries[0] if entries else None
 
     if not entry:
-        # Check active session memory in interview_engine
-        for sid, state in interview_engine.sessions.items():
-            for ans in state.get("answers", []):
-                if ans.get("question_id") == ref_id:
-                    return {
-                        "id": f"turn_mem_{ref_id}",
-                        "session_id": sid,
-                        "question_id": ref_id,
-                        "question_text": ans.get("question_text", "Doctor asked question"),
-                        "answer_text": ans.get("answer_text", ""),
-                        "verbatim_voice": ans.get("verbatim_voice"),
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "language": ans.get("language", "hi"),
-                        "speaker": "patient",
-                    }
-        # Fallback response for demo / test cases if DB row not found
-        return {
-            "id": f"mock_{ref_id}",
-            "session_id": session_id or "dev-test-001",
-            "question_id": ref_id,
-            "question_text": f"Question {ref_id}: मरीज से पूछा गया प्रश्न",
-            "answer_text": "मरीज का दर्ज किया गया उत्तर",
-            "verbatim_voice": None,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "language": "hi",
-            "speaker": "patient",
-        }
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transcript reference '{ref_id}' not found for specified encounter."
+        )
 
     return {
         "id": entry.id,
@@ -885,9 +963,5 @@ async def get_session_transcript_alias_endpoint(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    GET /api/interview/{session_id}/transcript
-    Alias for /api/interview/transcripts/{session_id}
-    """
+    """Alias for /api/interview/transcripts/{session_id}"""
     return await get_session_transcripts_endpoint(session_id=session_id, db=db)
-

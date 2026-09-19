@@ -24,10 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.database import get_db
-from app.db.models import ClinicalSummary, ExtractedEntityModel, InterviewTranscript, Patient, Session
+from app.db.models import ClinicalSummary, ExtractedEntityModel, InterviewTranscript, Patient, RedFlagEventModel, Session
+from app.routes.red_flag import staff_alert_manager
 from app.services.folk_idioms import folk_idiom_normalizer
+from app.services.interview_engine import interview_engine
+from app.services.lab_parser import lab_parser
+from app.services.red_flag_detector import detector as red_flag_detector
+from app.services.session_manager import session_manager
 
 logger = logging.getLogger("medikiosk.routes.patient")
+
 router = APIRouter(prefix="/api/patient", tags=["Patient Experience & Voice"])
 
 
@@ -283,11 +289,15 @@ async def explain_lab_report(
             value_str = entity.value
             unit = entity.unit or ("%" if "%" in entity.value else "mg/dL")
 
-    # Determine status & reference range
+    # Determine status & reference range using StructuredLabParser
     is_hi = (req.language == "hi")
+    parsed = lab_parser.parse(value_str, test_name=test_name, explicit_unit=unit)
+    num_val = parsed.effective_value if parsed.effective_value is not None else 7.1
+    if parsed.test_name:
+        test_name = parsed.test_name
+    if parsed.unit:
+        unit = parsed.unit
     tn_lower = test_name.lower()
-    num_match = re.search(r"(\d+(?:\.\d+)?)", value_str)
-    num_val = float(num_match.group(1)) if num_match else 7.1
 
     status: Literal["normal", "high", "low"] = "normal"
     ref_range = "4.0 - 5.7 %"
@@ -312,6 +322,34 @@ async def explain_lab_report(
             status = "normal"
             explanation = f"आपका HbA1c स्तर {value_str} सामान्य सीमा (5.7% से कम) में है।" if is_hi else f"Your HbA1c level of {value_str} is within the target normal range."
             patient_tip = "संतुलित आहार और नियमित व्यायाम बनाए रखें।" if is_hi else "Maintain healthy lifestyle habits."
+
+    elif "platelet" in tn_lower or "plt" in tn_lower:
+        ref_range = "150,000 - 450,000 /cumm (1.5 - 4.5 Lakhs /cumm)"
+        unit = "/cumm"
+        if num_val < 150000:
+            status = "low"
+            explanation = (
+                f"आपकी प्लेटलेट काउंट {value_str} सामान्य सीमा (1.5 लाख से कम) से कम है।"
+                if is_hi
+                else f"Your platelet count of {value_str} is below normal range (150,000 - 450,000 /cumm)."
+            )
+            patient_tip = "डॉक्टर से सलाह लें और किसी भी असामान्य रक्तस्राव पर ध्यान दें।" if is_hi else "Consult your doctor and watch for any unexpected bruising or bleeding."
+        elif num_val > 450000:
+            status = "high"
+            explanation = (
+                f"आपकी प्लेटलेट काउंट {value_str} सामान्य सीमा से अधिक है।"
+                if is_hi
+                else f"Your platelet count of {value_str} is elevated above normal range."
+            )
+            patient_tip = "पर्याप्त पानी पिएं और डॉक्टर से परामर्श लें।" if is_hi else "Stay well hydrated and review with your physician."
+        else:
+            status = "normal"
+            explanation = (
+                f"आपकी प्लेटलेट काउंट {value_str} सामान्य और स्वस्थ है।"
+                if is_hi
+                else f"Your platelet count of {value_str} is within the normal healthy range."
+            )
+            patient_tip = "संतुलित आहार और दिनचर्या बनाए रखें।" if is_hi else "Maintain healthy lifestyle habits."
 
     elif "hemo" in tn_lower or "hb" in tn_lower:
         ref_range = "12.0 - 15.5 g/dL (Female), 13.0 - 17.0 g/dL (Male)"
@@ -378,23 +416,99 @@ async def capture_unvoiced_concern(
     """
     POST /api/patient/unvoiced-concern
     Captures post-consultation patient concerns or questions before session wipe,
-    normalizes folk idioms, and persists turn in interview_transcripts.
+    evaluates for red-flag safety emergencies, normalizes folk idioms,
+    and persists turn in interview_transcripts.
     """
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="Concern text cannot be empty")
 
-    # Normalize folk idioms while preserving verbatim
+    await session_manager.assert_session_active(req.session_id, db)
+
+    # 1. Evaluate safety red-flags with contextual question
+    question_context = "क्या कुछ और भी है जो आप डॉक्टर को बताना चाहते हैं? (Is there anything else you wanted to mention?)"
+    red_flag = red_flag_detector.scan_and_confirm(
+        text=req.text,
+        session_id=req.session_id,
+        question_context=question_context,
+    )
+
+    transcript_id = str(uuid.uuid4())
+
+    if red_flag:
+        logger.warning(
+            f"Emergency red flag triggered in unvoiced concern for session {req.session_id}: "
+            f"{red_flag.trigger_phrase} ({red_flag.severity})"
+        )
+        # Persist event
+        event_model = RedFlagEventModel(
+            id=red_flag.event_id,
+            session_id=req.session_id,
+            trigger_phrase=red_flag.trigger_phrase,
+            matched_rule=red_flag.matched_rule,
+            severity=red_flag.severity,
+            category=red_flag.category,
+            timestamp=red_flag.timestamp,
+            is_dismissed=False,
+            is_acknowledged=False,
+        )
+        db.add(event_model)
+
+        # Persist transcript entry under node_name="emergency_hold"
+        entry = InterviewTranscript(
+            id=transcript_id,
+            session_id=req.session_id,
+            turn_number=99,
+            question_id="q_unvoiced_concern_01",
+            question_text=question_context,
+            answer_text=req.text,
+            verbatim_voice=req.verbatim_voice or req.text,
+            speaker="patient",
+            text=req.text,
+            language=req.language,
+            node_name="emergency_hold",
+            timestamp=datetime.now(UTC),
+        )
+        db.add(entry)
+        await db.commit()
+
+        # Update interview engine session state if active
+        sess_state = interview_engine.sessions.get(req.session_id)
+        if sess_state:
+            sess_state["is_paused"] = True
+            sess_state["paused_reason"] = "red_flag"
+
+        # Broadcast to staff
+        await staff_alert_manager.broadcast_alert({
+            "event_id": red_flag.event_id,
+            "patient_name": "मरीज (Patient)",
+            "kiosk_id": settings.KIOSK_ID,
+            "trigger_phrase": red_flag.trigger_phrase,
+            "severity": red_flag.severity,
+            "category": red_flag.category,
+            "session_id": req.session_id,
+            "timestamp": red_flag.timestamp.isoformat() if hasattr(red_flag.timestamp, "isoformat") else str(red_flag.timestamp),
+        })
+
+        return UnvoicedConcernResponse(
+            session_id=req.session_id,
+            status="emergency_held",
+            transcript_id=transcript_id,
+            message="Emergency safety hold triggered. A medical staff member has been alerted immediately.",
+            concern_text=req.text,
+            normalized_clinical_text=req.text,
+        )
+
+    # 2. Clean path: Normalize folk idioms while preserving verbatim
     normalized = folk_idiom_normalizer.normalize_statement(req.text)
     clinical_summary = normalized.get("clinical_summary", req.text)
 
     # Persist as a transcript entry under node_name="unvoiced_concern"
-    transcript_id = str(uuid.uuid4())
     entry = InterviewTranscript(
         id=transcript_id,
         session_id=req.session_id,
-        turn_number=99,  # Post-consult unvoiced concern marker
+        turn_number=99,
         question_id="q_unvoiced_concern_01",
-        question_text="क्या कुछ और भी है जो आप डॉक्टर को बताना चाहते हैं? (Is there anything else you wanted to mention?)",
+        question_text=question_context,
         answer_text=clinical_summary,
         verbatim_voice=req.verbatim_voice or req.text,
         speaker="patient",
@@ -416,3 +530,4 @@ async def capture_unvoiced_concern(
         concern_text=req.text,
         normalized_clinical_text=clinical_summary,
     )
+
